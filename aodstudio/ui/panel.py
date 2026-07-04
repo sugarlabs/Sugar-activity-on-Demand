@@ -8244,6 +8244,15 @@ if clipboard.wait_is_text_available():
             )
 
     def _generation_finished_cb(self, result):
+        self._apply_generation_result(result, announce=True)
+        return False
+
+    def _apply_generation_result(self, result, announce=True):
+        """Show a finished (or reopened) result in the studio.
+
+        announce=False reuses the same wiring for reopening an existing
+        project without pretending it was just generated in chat.
+        """
         self._detach_generation_job()
         self._generation_result = result
         self._review_generation_context = {}
@@ -8279,17 +8288,19 @@ if clipboard.wait_is_text_available():
         if self._aod_active_revision_id:
             self._selected_version = self._aod_active_revision_id
         self._refresh_version_history()
-        self._append_chat_status(provider_status)
-        chat_msgs = self._build_generation_chat_messages(result, plan)
-        for i, msg in enumerate(chat_msgs):
-            self._append_chat_message(
-                msg, from_user=False,
-                scroll=(i == len(chat_msgs) - 1))
+        if announce:
+            self._append_chat_status(provider_status)
+            chat_msgs = self._build_generation_chat_messages(result, plan)
+            for i, msg in enumerate(chat_msgs):
+                self._append_chat_message(
+                    msg, from_user=False,
+                    scroll=(i == len(chat_msgs) - 1))
         self._set_chat_entry_sensitive(True)
-        self._append_sidebar_status(provider_status)
-        self._append_sidebar_message(
-            _('Generated. Type another prompt here to refine '
-              'this activity.'))
+        if announce:
+            self._append_sidebar_status(provider_status)
+            self._append_sidebar_message(
+                _('Generated. Type another prompt here to refine '
+                  'this activity.'))
         self._update_sidebar_challenges(result, plan)
         return False
 
@@ -9087,9 +9098,55 @@ if clipboard.wait_is_text_available():
                 _('Opening %s...') % project['name'])
 
     def _open_project_in_studio(self, project):
-        if self._home_status_label is not None:
-            self._home_status_label.set_text(
-                _('Reopening %s...') % project['name'])
+        from aodstudio.model.aodgenerator import restore_generation_result
+        from aodstudio.model.aodprojects import build_spec_from_plan
+        from aodstudio.model.aodprojects import find_session_for_project
+        from aodstudio.model.aodservice import get_service
+
+        session = None
+        revision = None
+        try:
+            match = find_session_for_project(
+                project['project_path'], get_service().list_sessions())
+            if match is not None:
+                session, revision = match
+        except Exception:
+            logging.exception('Could not read sessions while reopening')
+
+        if session is not None:
+            spec = session.spec
+            summary = dict(revision.result_summary)
+        else:
+            # No session recorded for this project (older build): rebuild
+            # a spec from the plan; refinements will start a new thread.
+            spec = build_spec_from_plan(project['plan'])
+            summary = {
+                'project_path': project['project_path'],
+                'bundle_path': project['bundle_path'],
+            }
+
+        result = restore_generation_result(spec, summary)
+        if result is None:
+            if self._home_status_label is not None:
+                self._home_status_label.set_text(
+                    _('Could not reopen %s: its files are missing or '
+                      'damaged.') % project['name'])
+            return
+
+        self.cancel_generation()
+        self._aod_session_id = session.session_id if session else ''
+        self._aod_active_revision_id = \
+            revision.revision_id if revision else ''
+        self._aod_original_prompt = spec.prompt
+        self._set_prompt_text(spec.prompt)
+        self._set_studio_prompt(spec.prompt)
+
+        self._use_studio_layout()
+        self._select_studio_tab('preview')
+        self._stack.set_visible_child_name('studio')
+
+        self._apply_generation_result(result, announce=False)
+        self._append_chat_status(_('Reopened from your activities'))
 
     def __close_button_clicked_cb(self, button):
         self.emit('close-requested')
