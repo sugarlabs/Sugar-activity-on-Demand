@@ -3922,6 +3922,9 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 padding: 3px 10px;
                 min-height: 0;
             }
+            button.create-ai-prompt-chip label {
+                color: #333333;
+            }
             button.create-ai-prompt-chip:hover {
                 background-color: %(studio_lavender_soft)s;
                 border-color: %(studio_lavender_faint)s;
