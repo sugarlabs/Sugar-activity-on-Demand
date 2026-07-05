@@ -30,6 +30,7 @@ from generation.refine import build_refine_system_prompt
 from generation.refine import build_refine_user_prompt
 from generation.refine import parse_search_replace
 from generation.refine import apply_patches
+from generation.runtime_check import run_runtime_check
 from generation.validator import validate_activity_source_for_request
 
 
@@ -475,14 +476,38 @@ def _generate_activity_source_with_provider(provider, spec, plan, references,
 
         report = validate_activity_source_for_request(source, spec, plan)
         if report.valid:
-            return source, '', attempt
-
-        last_error = '\n'.join(report.errors)
-        progress.report(
-            'generating',
-            0.65,
-            'Validation failed on attempt %d; retrying' % attempt,
-        )
+            progress.report(
+                'generating',
+                0.66,
+                'Running the activity to make sure it works...',
+            )
+            runtime_ok, runtime_detail = run_runtime_check(
+                source, getattr(spec, 'name', 'Generated Activity'))
+            if runtime_ok:
+                plan['runtime_check'] = runtime_detail
+                return source, '', attempt
+            last_error = (
+                'The generated code crashed when run:\n%s\nFix the crash.'
+                % runtime_detail
+            )
+            progress.report(
+                'generating',
+                0.65,
+                'The code crashed when run (attempt %d); retrying'
+                % attempt,
+            )
+        else:
+            last_error = '\n'.join(report.errors)
+            progress.report(
+                'generating',
+                0.65,
+                'Validation failed on attempt %d; retrying' % attempt,
+            )
+        if report.warnings:
+            last_error += ''.join(
+                '\nAlso consider: %s' % warning
+                for warning in report.warnings
+            )
         # Brief backoff before the next attempt so we don't hammer the
         # provider immediately after a validation failure (1s, 2s, 4s…).
         if attempt < _CODEGEN_ATTEMPT_LIMIT:

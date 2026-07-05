@@ -11,10 +11,35 @@ and prints RUNTIME-OK on success; any crash prints the traceback and
 exits nonzero so the parent can feed it back to the model.
 """
 
+import logging
 import os
 import sys
 import tempfile
 import traceback
+
+
+class _StartupProblems(logging.Handler):
+    """Collect WARNING+ records emitted while the activity starts.
+
+    The preview runner deliberately degrades — salvaging a partial
+    canvas after an __init__ crash, stubbing failed imports — so
+    learners always see something.  The gate must not accept degraded
+    code, and every degradation is logged as a warning, so warnings
+    during startup are failures here.
+    """
+
+    def __init__(self):
+        logging.Handler.__init__(self)
+        self.setFormatter(logging.Formatter('%(message)s'))
+        self.problems = []
+
+    def emit(self, record):
+        # Theme noise (missing stock icons etc.) also lands on the
+        # root logger; every degradation message from the preview
+        # runner mentions "preview", so key on that.
+        if record.levelno >= logging.WARNING \
+                and 'preview' in record.getMessage().lower():
+            self.problems.append(self.format(record))
 
 
 def main(project_dir):
@@ -24,9 +49,19 @@ def main(project_dir):
 
     from preview.runner import render_activity_preview
 
-    instance, canvas, toolbar_ = render_activity_preview(project_dir)
+    problems = _StartupProblems()
+    logging.getLogger().addHandler(problems)
+    try:
+        instance, canvas, toolbar_ = render_activity_preview(project_dir)
+    finally:
+        logging.getLogger().removeHandler(problems)
     if instance is None:
         sys.stderr.write('Activity failed to start: %s\n' % canvas)
+        return 1
+    if problems.problems:
+        sys.stderr.write(
+            'Activity started only in degraded mode:\n%s\n'
+            % '\n\n'.join(problems.problems))
         return 1
 
     for _ in range(30):
