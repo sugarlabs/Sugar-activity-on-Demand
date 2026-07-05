@@ -3891,7 +3891,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
             if text and not text.startswith('<') and len(text) > 2:
                 return _('label: %s') % text[:30]
             return None
-        if isinstance(widget, (Gtk.Toolbar, Gtk.ToolbarBox)):
+        from sugar3.graphics.toolbarbox import ToolbarBox
+        if isinstance(widget, (Gtk.Toolbar, ToolbarBox)):
             return _('activity toolbar')
         if isinstance(widget, Gtk.Grid):
             return _('grid')
