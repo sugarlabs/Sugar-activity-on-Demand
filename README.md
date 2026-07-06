@@ -57,8 +57,8 @@
   sandboxed subprocess — started, event-pumped, saved and restored —
   before it is accepted; a crash comes back to the model as fix-it
   feedback. The model then reviews its own accepted code once for
-  weak spots (dead buttons, unreachable win logic) and patches them.
-  Every activity gets its own icon, drawn in your XO colors.
+  weak spots (dead buttons, unreachable win logic) and patches them —
+  and draws each activity its own icon, rendered in your XO colors.
 - 🖼️ **Live preview** — the generated activity runs embedded in the
   studio. Click any part of the preview and describe a change;
   refinements land as minimal patches with full version history.
@@ -139,7 +139,7 @@ call the provider you chose.
 ## Development
 
 ```sh
-python3 -m pytest tests/ -q     # 174 tests: pipeline, providers, UI smoke
+python3 -m pytest tests/ -q     # 189 tests: pipeline, providers, UI smoke
 python3 -m flake8 core llm generation service exports preview ui main.py
 ```
 

@@ -21,7 +21,7 @@ Sugar-activity-on-Demand/
 │   ├── runtime_check.py  runs candidate code in a GTK subprocess gate
 │   ├── runtime_harness.py  subprocess body for the runtime gate
 │   ├── critic.py      one self-review round over accepted code
-│   ├── icons.py       per-activity SVG icons in Sugar XO colors
+│   ├── icons.py       model-drawn activity icons (glyph fallback)
 │   ├── refine.py      SEARCH/REPLACE refinement patches
 │   └── templates.py   local template renderer (offline fallback)
 ├── service/           background execution and persistence
@@ -72,6 +72,14 @@ Provider code passes through three gates before a learner sees it:
 
 Outcomes are recorded in the saved plan under `runtime_check` and
 `critic`.
+
+The activity's icon comes from the model too (`icons.py`): one
+`generate_text` call returns a 55x55 SVG on Sugar's color entities,
+strictly sanitized (no scripts, images, text, gradients, or external
+references; the canonical entity header is re-applied).  Anything
+doubtful falls back to the deterministic template/category glyph.
+`AOD_AI_ICON=off` disables; the outcome is recorded under
+`icon_source`.
 
 ## Correspondence with the Sugar shell fork
 
