@@ -5,7 +5,7 @@
 <h1 align="center">Sugar Activity Studio</h1>
 
 <p align="center">
-  <b>Describe a learning activity in plain words — get a real, installable Sugar activity.</b>
+  <strong>Turn a plain-language learning idea into a real, installable Sugar activity.</strong>
 </p>
 
 <p align="center">
@@ -25,141 +25,199 @@
 
 ---
 
-> **Sugar Activity Studio** is the standalone desktop app for
-> **Activity on Demand** by <b>Sugar Labs</b>: an AI-assisted studio that turns a
-> learner's or teacher's idea — *"a fraction matching game with levels
-> and instant feedback"* — into a complete
-> [Sugar](https://sugarlabs.org) activity: planned, coded, validated,
-> live-previewed, and packaged as an installable `.xo` bundle.
-> Runs on any Linux desktop. **No Sugar shell required.**
+## Overview
+
+**Sugar Activity Studio** is a standalone desktop application for **Activity on Demand** by **Sugar Labs**.
+
+It helps learners and teachers describe an activity in plain words and turn that idea into a complete [Sugar](https://sugarlabs.org) activity. The studio plans, generates, validates, previews, refines, and packages the activity as an installable `.xo` bundle.
+
+Example:
+
+> “A fraction matching game with levels and instant feedback.”
+
+The studio runs on any Linux desktop and does **not** require the Sugar shell to be installed or running.
 
 <p align="center">
-  <sub><b>idea</b> → ✨ enhance → plan · RAG → generate → validate → run ✓ → self-review → <b>preview</b> → refine → <b>export</b></sub>
+  <sub><strong>idea</strong> → enhance → plan → generate → validate → run → preview → refine → export</sub>
 </p>
+
+---
 
 ## Features
 
-- 🏠 **Sugar-style home** — opens on your XO icon, in your own colors,
-  with every activity you have generated ringed around it — the same
-  ring/spiral geometry as the Sugar shell. Click an icon to play it;
-  hover or right-click for **Open** / **Modify**.
-- ✨ **Plain-language creation** — pick a learning area, describe the
-  idea, press Send. The **Enhance** button (and automatic enhancement
-  for short prompts) expands rough ideas into a detailed brief the AI
-  can build correctly — and the chat shows the brief it understood, so
-  you learn what a strong prompt looks like.
-- 🧭 **Grounded generation** — the pipeline retrieves patterns from real
-  installed Sugar activities (local RAG — no uploads, no training),
-  plans with your chosen model, generates `activity.py`, and validates
-  it (syntax, Sugar API misuse, import safety, request match) with
-  automatic retry-and-fix rounds.
-- ✅ **Runtime-proven code** — every candidate is actually *run* in a
-  sandboxed subprocess — started, event-pumped, saved and restored —
-  before it is accepted; a crash comes back to the model as fix-it
-  feedback. The model then reviews its own accepted code once for
-  weak spots (dead buttons, unreachable win logic) and patches them —
-  and draws each activity its own icon, rendered in your XO colors.
-- 🖼️ **Live preview** — the generated activity runs embedded in the
-  studio. Click any part of the preview and describe a change;
-  refinements land as minimal patches with full version history.
-- 📜 **Review & versions** — read the generated code with syntax
-  highlighting, inspect the plan, hop between revisions.
-- 📦 **Export & install** — one click packages an `.xo` bundle, exports
-  buildable Flatpak sources, or installs to `~/Activities` and launches
-  the activity immediately via `sugar-activity3`.
-- 🛡️ **Safe by design** — generated code is held to an import/call
-  allowlist, may not touch the network or filesystem APIs, and every
-  failure path degrades gracefully.
+### Sugar-style home
+
+The studio opens with a Sugar-inspired home view centered around your XO identity. Generated activities are arranged around it using the same ring-style geometry as the Sugar shell.
+
+You can open an activity, continue modifying it, or create a new one from the home screen.
+
+### Plain-language creation
+
+Choose a learning area, describe your idea, and send it to the studio.
+
+The prompt enhancement flow can expand short or rough ideas into a clearer activity brief. The enhanced brief is shown back to you, helping you understand what the model will build and how to write stronger prompts.
+
+### Grounded generation
+
+The generation pipeline retrieves patterns from real installed Sugar activities using local RAG. It uses those patterns to plan and generate the activity while staying close to Sugar conventions.
+
+No activity data is uploaded for training.
+
+### Runtime validation
+
+Generated code is not accepted only because it looks correct. Each candidate is validated for syntax, Sugar API usage, import safety, and request alignment.
+
+The activity is then run in a sandboxed subprocess, event-pumped, saved, restored, and checked before it is accepted. Crashes are returned to the model as feedback for retry-and-fix rounds.
+
+### Live preview and refinement
+
+Generated activities run directly inside the studio preview.
+
+You can click part of the preview and describe a change. Refinements are applied as minimal patches, with full version history preserved.
+
+### Review and version history
+
+The studio lets you inspect the generated code, review the plan, and move between revisions. This makes the process transparent and easier to debug.
+
+### Export and install
+
+Activities can be exported as `.xo` bundles, exported as buildable Flatpak sources, or installed directly to `~/Activities`.
+
+Installed activities can be launched immediately using `sugar-activity3`.
+
+### Safe by design
+
+Generated code is checked against an import and call allowlist. Network access and unsafe filesystem APIs are blocked, and failure paths are designed to degrade gracefully.
+
+---
 
 ## Requirements
 
-The GTK stack comes from your distribution, not PyPI:
+The GTK and Sugar dependencies come from your Linux distribution, not PyPI.
 
-| Requirement | Why |
-|---|---|
-| Python ≥ 3.8 | the app itself |
-| GTK 3 + PyGObject (`python3-gi`, `gir1.2-gtk-3.0`) | the UI |
-| Sugar toolkit (`python3-sugar3`, `sugar-toolkit-gtk3`) | Sugar widgets, `.xo` packaging, the `sugar-activity3` launcher |
-| *(optional)* `sugar-artwork` themes | authentic Sugar look; degrades gracefully without |
+| Requirement          | Purpose                                                        |
+| -------------------- | -------------------------------------------------------------- |
+| Python 3.8 or newer  | Runs the studio                                                |
+| GTK 3 + PyGObject    | Provides the desktop UI                                        |
+| Sugar Toolkit GTK3   | Sugar widgets, `.xo` packaging, and `sugar-activity3` launcher |
+| sugar-artwork themes | Optional Sugar visual styling                                  |
 
-On Debian/Ubuntu:
+On Debian or Ubuntu:
 
 ```sh
 sudo apt install python3-gi gir1.2-gtk-3.0 python3-sugar3 sugar-toolkit-gtk3
 ```
 
-> [!NOTE]
-> The studio depends on the Sugar **toolkit as a library** — the way any
-> GTK app depends on GTK. It does **not** need the Sugar desktop
-> installed or running.
+> The studio depends on the Sugar toolkit as a library, the same way a GTK app depends on GTK. It does not require the Sugar desktop shell.
+
+---
 
 ## Setup & run
 
 ```sh
 git clone https://github.com/Ashutoshx7/Sugar-activity-on-Demand.git
 cd Sugar-activity-on-Demand
-python3 bin/sugar-aod-studio        # or: python3 main.py
+python3 bin/sugar-aod-studio
 ```
 
-### Connect an AI model
+Or run:
 
-Open the create page and use the **provider selector** next to the
-prompt box: choose a provider, paste your API key, Save. Keys are
-stored locally in your profile and never leave your machine except to
-call the provider you chose.
+```sh
+python3 main.py
+```
 
-| | |
-|---|---|
-| **Providers** | OpenRouter *(default: `anthropic/claude-opus-4.8`)*, Gemini, OpenAI, Claude, DeepSeek, Qwen, Moonshot, Ollama *(local, no key)* |
-| **Offline** | a keyless *local template* mode for trying the flow without any AI |
-| **Overrides** | `AOD_OPENROUTER_MODEL`, `AOD_GEMINI_MODEL`, `AOD_OLLAMA_MODEL`, … and `AOD_LLM_PROVIDER` for the default provider |
+---
+
+## Connect an AI model
+
+Open the create page and use the provider selector next to the prompt box.
+
+Choose a provider, paste your API key, and save. Keys are stored locally in your profile and are only used to call the provider you select.
+
+| Option       | Details                                                                                |
+| ------------ | -------------------------------------------------------------------------------------- |
+| Providers    | OpenRouter, Gemini, OpenAI, Claude, DeepSeek, Qwen, Moonshot, Ollama                   |
+| Default      | OpenRouter with `anthropic/claude-opus-4.8`                                            |
+| Offline mode | Keyless local template mode for trying the flow without an AI provider                 |
+| Overrides    | `AOD_OPENROUTER_MODEL`, `AOD_GEMINI_MODEL`, `AOD_OLLAMA_MODEL`, and `AOD_LLM_PROVIDER` |
+
+---
 
 ## Using the studio
 
-1. **Home** — everything you've made, around your XO. Click to play,
-   right-click → *Modify* to keep working on one, or **Create new**.
-2. **Create** — pick a learning area, type your idea. Press
-   **✨ Enhance** to expand it into an editable brief, or just Send —
-   short prompts are enhanced automatically (toggle: *Enhance
-   Auto/Off*).
-3. **Studio** — watch the generation progress, then explore the
-   **Preview / Review / Versions** tabs. Click a part of the live
-   preview and describe a change, or chat a refinement — each one
-   becomes a new version.
-4. **Ship it** — *Export XO*, *Export Flatpak*, or *Install & Open* to
-   put it in `~/Activities` and play it instantly.
+### 1. Home
+
+View all activities you have created around your XO icon. Open an activity, modify an existing one, or create a new project.
+
+### 2. Create
+
+Pick a learning area and describe your idea. Use prompt enhancement to turn a rough idea into a more complete activity brief, or send the prompt directly.
+
+Short prompts can be enhanced automatically using the auto-enhance toggle.
+
+### 3. Studio
+
+Watch the generation pipeline progress, then explore the generated activity through the preview, review, and version tabs.
+
+You can refine the activity by selecting part of the preview or sending a follow-up instruction.
+
+### 4. Ship
+
+Export the activity as an `.xo` bundle, export Flatpak sources, or install it directly to `~/Activities`.
+
+---
 
 ## Where things live
 
-| Path | Contents |
-|---|---|
-| `~/.sugar/default/aod/` | projects, sessions, jobs, API keys — shared with a Sugar shell install if you have one |
-| `~/Activities/` | installed activities |
+| Path                    | Contents                                              |
+| ----------------------- | ----------------------------------------------------- |
+| `~/.sugar/default/aod/` | Projects, sessions, jobs, and locally stored API keys |
+| `~/Activities/`         | Installed Sugar activities                            |
+
+The `~/.sugar/default/aod/` directory is shared with a Sugar shell install when one is available.
+
+---
 
 ## Development
 
+Run the test suite:
+
 ```sh
-python3 -m pytest tests/ -q     # 189 tests: pipeline, providers, UI smoke
+python3 -m pytest tests/ -q
+```
+
+Run linting:
+
+```sh
 python3 -m flake8 core llm generation service exports preview ui main.py
 ```
 
-The code is organized by domain at the repository root — `core/`
-(spec, licenses, projects), `llm/` (providers, credentials, prompt
-enhancement), `generation/` (pipeline, RAG, codegen, validation,
-refinement), `service/` (job queue, sessions), `exports/` (Flatpak),
-`preview/`, and `ui/`. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full map.
-A test enforces that no `jarabe` (Sugar shell) module is ever imported.
+The codebase is organized by domain:
+
+| Directory     | Purpose                                                    |
+| ------------- | ---------------------------------------------------------- |
+| `core/`       | Specs, licenses, and project models                        |
+| `llm/`        | Providers, credentials, and prompt enhancement             |
+| `generation/` | Pipeline, RAG, code generation, validation, and refinement |
+| `service/`    | Job queue and sessions                                     |
+| `exports/`    | Flatpak and export logic                                   |
+| `preview/`    | Activity preview runtime                                   |
+| `ui/`         | GTK interface                                              |
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture map.
+
+A test ensures that no `jarabe` module from the Sugar shell is imported, keeping the studio independent from the full Sugar desktop environment.
+
+---
 
 ## Provenance
 
-Extracted from the `aod-activity-on-demand` branch of the
-[Sugar shell fork](https://github.com/Ashutoshx7/sugar), where the same
-experience also runs embedded in the Sugar home view. The home ring
-layout is ported from Sugar's `favoriteslayout.py`.
+Sugar Activity Studio was extracted from the `aod-activity-on-demand` branch of the [Sugar shell fork](https://github.com/Ashutoshx7/sugar), where the same experience also runs embedded inside the Sugar home view.
+
+The home ring layout is ported from Sugar's `favoriteslayout.py`.
 
 ---
 
 <p align="center">
-  <sub>GPL-3.0-or-later, same as Sugar — see <a href="LICENSE">LICENSE</a> · built with ❤️ for learners</sub>
+  <sub>GPL-3.0-or-later, same as Sugar. See <a href="LICENSE">LICENSE</a>.</sub>
 </p>
