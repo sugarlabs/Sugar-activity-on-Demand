@@ -16,6 +16,7 @@ Sugar-activity-on-Demand/
 │   ├── prompts.py     planner prompts
 │   ├── rag.py         local retrieval over installed Sugar activities
 │   ├── codegen.py     code-generation prompts and response extraction
+│   ├── repair_loop.py transactional same-source SEARCH/REPLACE debugging
 │   ├── generator.py   plan normalization, project assembly, .xo packaging
 │   ├── validator.py   safety + quality validation of generated code
 │   ├── runtime_check.py  runs candidate code in a GTK subprocess gate
@@ -58,7 +59,8 @@ Provider code passes through three gates before a learner sees it:
    request-specific quality checks. Errors reject the attempt;
    warnings ride along as "Also consider" hints on retries.
 2. **Runtime gate** (`runtime_check.py` + `runtime_harness.py`) —
-   the candidate actually runs in a sandboxed GTK subprocess on the
+   the candidate actually runs in an isolated, minimal-environment GTK
+   subprocess on the
    preview stubs: start, pump events, Journal write/read round-trip.
    Crashes, degraded startup, or a blocking `__init__` become retry
    feedback for the model. Skipped without a display;
@@ -72,6 +74,21 @@ Provider code passes through three gates before a learner sees it:
 
 Outcomes are recorded in the saved plan under `runtime_check` and
 `critic`.
+
+Rejected code is never replaced by another complete generation. After the
+one initial `activity.py` response, `repair_loop.py` asks for exact,
+uniquely-anchored SEARCH/REPLACE patches. Each proposal is applied
+transactionally, checked from the static gate onward, and either committed or
+rolled back. Cycles, `FULLREGEN`, ambiguous anchors, complete-file patches,
+and credential-bearing responses are refused. Repair events and source hashes
+are persisted on the job and in `aod_plan.json`; the per-run repair budget is
+controlled by `AOD_CODE_REPAIR_ATTEMPT_LIMIT` (default 8). Exhaustion fails
+with the best candidate preserved rather than regenerating it.
+
+Before candidate execution, the runtime gate probes GTK/Sugar independently.
+An unusable X11/Wayland environment is classified as unavailable
+infrastructure and recorded as `runtime_unverified`, so it cannot become bogus
+repair feedback or be mistaken for a completed runtime check.
 
 The activity's icon comes from the model too (`icons.py`): one
 `generate_text` call returns a 55x55 SVG on Sugar's color entities,

@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import os
+import hashlib
+import json
 import shutil
 import tempfile
 import unittest
@@ -81,7 +83,8 @@ class TestAodGenerator(unittest.TestCase):
         self.assertEqual('chess', result.plan['template'])
         self.assertIn('_starting_board', result.files['activity.py'])
         self.assertIn('_can_move', result.files['activity.py'])
-        self.assertIn('Move log will appear here.', result.files['activity.py'])
+        self.assertIn(
+            'Move log will appear here.', result.files['activity.py'])
         self.assertTrue(validate_project(result.project_path).valid)
 
     def test_carrom_prompt_generates_turn_taking_board_template(self):
@@ -205,6 +208,13 @@ class TestAodGenerator(unittest.TestCase):
             '# SPDX-License-Identifier: MIT',
             result.files['activity.py'],
         )
+        expected_hash = hashlib.sha256(
+            result.files['activity.py'].encode('utf-8')).hexdigest()
+        self.assertEqual(expected_hash, result.plan['source_hash'])
+        with open(os.path.join(result.project_path, 'aod_plan.json'),
+                  encoding='utf-8') as plan_file:
+            self.assertEqual(expected_hash,
+                             json.load(plan_file)['source_hash'])
         with open(os.path.join(result.project_path, 'LICENSE'),
                   encoding='utf-8') as license_file:
             self.assertIn('BSD 3-Clause License', license_file.read())

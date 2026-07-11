@@ -283,10 +283,37 @@ def request_icon_svg(provider, spec, plan):
             build_icon_user_prompt(spec, plan),
         )
     except Exception as error:
-        logging.warning('Icon drawing call failed: %s', error)
+        logging.warning('Icon drawing call failed: %s',
+                        _redact_provider_value(error, provider))
+        return None
+
+    if _contains_provider_secret(response, provider):
+        logging.warning('Model icon contained credential material')
         return None
 
     icon = sanitize_icon_svg(response)
     if icon is None:
         logging.warning('Model icon failed sanitization; using fallback')
     return icon
+
+
+def _provider_secrets(provider):
+    return [
+        value for value in (
+            getattr(provider, '_api_key', ''),
+            getattr(provider, 'api_key', ''),
+        )
+        if isinstance(value, str) and value
+    ]
+
+
+def _contains_provider_secret(value, provider):
+    return isinstance(value, str) and any(
+        secret in value for secret in _provider_secrets(provider))
+
+
+def _redact_provider_value(value, provider):
+    text = str(value)
+    for secret in _provider_secrets(provider):
+        text = text.replace(secret, '[redacted]')
+    return text

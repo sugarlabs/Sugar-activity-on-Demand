@@ -2147,6 +2147,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
         prompt = context.get('prompt', '')
         message = context.get('message', _('Starting generation'))
         draft_source = context.get('draft_activity_source', '')
+        repair_history = context.get('repair_history', [])
+        repair_diagnostics = context.get('repair_diagnostics', {})
         mode = _('Refinement') if context.get('is_refinement') else \
             _('Generation')
         checklist = [
@@ -2165,6 +2167,12 @@ class CreateAIActivityPanel(Gtk.EventBox):
             'prompt': prompt,
             'draft_activity_source_available': bool(draft_source),
             'draft_activity_source_chars': len(draft_source),
+            'repair_attempts': len([
+                event for event in repair_history
+                if isinstance(event, dict) and event.get('attempt', 0) > 0
+            ]),
+            'repair_history': repair_history,
+            'latest_repair_diagnostics': repair_diagnostics,
             'checks_pending': checklist,
         }
         common_meta = _('%(mode)s in progress    %(provider)s - '
@@ -7006,7 +7014,11 @@ if clipboard.wait_is_text_available():
         validate_code = self._selected_options.get('validate', 'on') == 'on'
 
         self._detach_generation_job()
-        self._generation_result = None
+        # Keep the accepted parent revision while a refinement is running.
+        # If repair is interrupted or fails, the next message must continue
+        # from that same source instead of falling into a fresh generation.
+        if not is_refinement:
+            self._generation_result = None
         if not is_refinement:
             self._aod_session_id = ''
             self._aod_active_revision_id = ''
@@ -7045,6 +7057,8 @@ if clipboard.wait_is_text_available():
             'prompt': chat_prompt or display_prompt,
             'is_refinement': is_refinement,
             'draft_activity_source': '',
+            'repair_history': [],
+            'repair_diagnostics': {},
         }
         self._review_draft_was_shown = False
         self._set_review_file(self._current_review_file)
@@ -7196,6 +7210,11 @@ if clipboard.wait_is_text_available():
                 draft_source
             if not self._review_draft_was_shown:
                 self._review_draft_was_shown = True
+        if job is not None:
+            self._review_generation_context['repair_history'] = list(
+                getattr(job, 'repair_history', ()) or ())
+            self._review_generation_context['repair_diagnostics'] = dict(
+                getattr(job, 'repair_diagnostics', {}) or {})
         self._set_review_file(self._current_review_file)
 
     def _update_provider_call_status(self, stage, fraction, message):
@@ -7516,6 +7535,11 @@ if clipboard.wait_is_text_available():
             if draft_source:
                 self._review_generation_context['draft_activity_source'] = \
                     draft_source
+            if job is not None:
+                self._review_generation_context['repair_history'] = list(
+                    getattr(job, 'repair_history', ()) or ())
+                self._review_generation_context['repair_diagnostics'] = dict(
+                    getattr(job, 'repair_diagnostics', {}) or {})
         self._stop_generation_animation()
         if self._prompt_status_label is not None:
             self._prompt_status_label.set_text(_('Generation failed'))
@@ -8184,14 +8208,13 @@ def _clean_generation_error_text(error_text):
     """Strip redundant pipeline prefixes so the learner sees the real
     validation reasons instead of a doubled-up error chain.
 
-    The pipeline wraps validation failures as:
-      Provider could not generate valid activity code:
-        Provider generated code did not pass validation: <reasons>
-    Both prefixes are implementation details; the learner only needs
+    The pipeline wraps validation/repair failures with implementation detail.
+    These prefixes are implementation details; the learner only needs
     the <reasons> part.
     """
     text = str(error_text or '').strip()
     for prefix in (
+            'Provider could not repair activity code: ',
             'Provider could not generate valid activity code: ',
             'Provider generated code did not pass validation: '):
         if text.startswith(prefix):
