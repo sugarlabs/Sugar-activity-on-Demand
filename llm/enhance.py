@@ -85,7 +85,12 @@ def enhance_prompt(provider, prompt, spec=None, timeout=_ENHANCE_TIMEOUT):
             timeout=timeout,
         )
     except Exception as error:
-        logging.warning('Prompt enhancement failed: %s', error)
+        logging.warning('Prompt enhancement failed: %s',
+                        _redact_provider_value(error, provider))
+        return original, False
+
+    if _contains_provider_secret(response, provider):
+        logging.warning('Prompt enhancement contained credential material')
         return original, False
 
     cleaned = _clean(response)
@@ -111,3 +116,25 @@ def _clean(text):
     if len(cleaned) > MAX_PROMPT_LENGTH:
         cleaned = cleaned[:MAX_PROMPT_LENGTH].rstrip()
     return cleaned
+
+
+def _provider_secrets(provider):
+    return [
+        value for value in (
+            getattr(provider, '_api_key', ''),
+            getattr(provider, 'api_key', ''),
+        )
+        if isinstance(value, str) and value
+    ]
+
+
+def _contains_provider_secret(value, provider):
+    return isinstance(value, str) and any(
+        secret in value for secret in _provider_secrets(provider))
+
+
+def _redact_provider_value(value, provider):
+    text = str(value)
+    for secret in _provider_secrets(provider):
+        text = text.replace(secret, '[redacted]')
+    return text

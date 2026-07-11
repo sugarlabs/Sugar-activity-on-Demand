@@ -3,18 +3,25 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import os
+import hashlib
+import json
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 import zipfile
 
 from llm.credentials import AODCredentialStore
+from llm.providers import ProviderError
 from generation.generator import enrich_plan
 from generation.pipeline import package_generation_result
+from service.jobs import AODJob
 from service.jobs import AODJobStore
+from service.jobs import STATUS_CANCELLED
 from service.jobs import STATUS_FAILED
 from service.jobs import STATUS_FINISHED
+from service.jobs import STATUS_GENERATING
 from service.sessions import AODSessionStore
 from service.sessions import ROLE_ASSISTANT
 from service.sessions import ROLE_USER
@@ -96,6 +103,56 @@ class TestAodService(unittest.TestCase):
         self.service.watch('job-id', observer.callback)
         self.service.unwatch('job-id', observer.callback)
         self.assertNotIn('job-id', self.service._callbacks)
+
+    def test_repair_state_is_persisted_without_losing_original_source(self):
+        spec = ActivitySpec(
+            'Repair State', 'Create a quiz.', 'logic_math', 'MIT')
+        job = AODJob.create(spec, provider_name='openai')
+        self.service._set_progress(
+            job,
+            STATUS_GENERATING,
+            'generating',
+            0.5,
+            'Repairing',
+            {
+                'draft_activity_source': 'original source\n',
+                'initial_activity_source': True,
+                'repair_event': {
+                    'attempt': 1,
+                    'outcome': 'verification_rejected',
+                },
+                'repair_diagnostics': {
+                    'stage': 'static_validation',
+                    'errors': ['broken'],
+                },
+            },
+        )
+        self.service._set_progress(
+            job,
+            STATUS_GENERATING,
+            'generating',
+            0.4,
+            'Out-of-order callback',
+        )
+        self.assertEqual(0.5, job.progress)
+        self.service._set_progress(
+            job,
+            STATUS_GENERATING,
+            'generating',
+            0.6,
+            'Repair improved',
+            {'draft_activity_source': 'improved source\n'},
+        )
+
+        persisted = self.store.load(job.job_id)
+        self.assertEqual('original source\n',
+                         persisted.original_activity_source)
+        self.assertEqual('improved source\n',
+                         persisted.draft_activity_source)
+        self.assertEqual('verification_rejected',
+                         persisted.repair_history[0]['outcome'])
+        self.assertEqual('static_validation',
+                         persisted.repair_diagnostics['stage'])
 
     def test_finished_job_restores_result_after_service_restart(self):
         spec = ActivitySpec(
@@ -271,9 +328,10 @@ class TestAodService(unittest.TestCase):
             'MIT',
             template='canvas',
         )
+        self.service.register_provider(_RefinementProvider())
         second_job = self.service.submit_activity(
             second,
-            provider_name='local-template',
+            provider_name='openai',
             output_root=self.project_root,
             session_id=first_finished.session_id,
             parent_revision_id=first_finished.result_summary['revision_id'],
@@ -281,6 +339,14 @@ class TestAodService(unittest.TestCase):
         )
         second_finished = self._wait_for_terminal(second_job.job_id)
         self.assertEqual(STATUS_FINISHED, second_finished.status)
+
+        first_source = first_finished.result.files['activity.py']
+        second_source = second_finished.result.files['activity.py']
+        self.assertIn('# switch-student repair marker', second_source)
+        self.assertEqual(
+            hashlib.sha256(first_source.encode('utf-8')).hexdigest(),
+            second_finished.result_summary['parent_source_hash'],
+        )
 
         session = self.service.get_session(first_finished.session_id)
         self.assertEqual(2, len(session.revisions))
@@ -292,6 +358,100 @@ class TestAodService(unittest.TestCase):
             second_finished.result_summary['revision_id'],
             session.active_revision_id,
         )
+
+    def test_local_refinement_fails_with_parent_source_preserved(self):
+        spec = ActivitySpec(
+            'Preserve Local', 'Create a writing activity.', 'creation',
+            'MIT', template='narrative')
+        first_job = self.service.submit_activity(
+            spec,
+            provider_name='local-template',
+            output_root=self.project_root,
+        )
+        first = self._wait_for_terminal(first_job.job_id)
+        self.assertEqual(STATUS_FINISHED, first.status)
+
+        second_job = self.service.submit_activity(
+            spec,
+            provider_name='local-template',
+            output_root=self.project_root,
+            session_id=first.session_id,
+            parent_revision_id=first.result_summary['revision_id'],
+            user_prompt='Add another writing prompt.',
+        )
+        second = self._wait_for_terminal(second_job.job_id)
+
+        self.assertEqual(STATUS_FAILED, second.status)
+        self.assertEqual(first.result.files['activity.py'],
+                         second.original_activity_source)
+        self.assertEqual(first.result.files['activity.py'],
+                         second.draft_activity_source)
+        self.assertIn('was not regenerated', second.error)
+
+    def test_refinement_rejects_parent_source_lineage_mismatch(self):
+        spec = ActivitySpec(
+            'Lineage Check', 'Create a writing activity.', 'creation',
+            'MIT', template='narrative')
+        first_job = self.service.submit_activity(
+            spec,
+            provider_name='local-template',
+            output_root=self.project_root,
+        )
+        first = self._wait_for_terminal(first_job.job_id)
+        source = first.result.files['activity.py']
+        expected_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
+        plan_path = os.path.join(first.result.project_path, 'aod_plan.json')
+        with open(plan_path, encoding='utf-8') as plan_file:
+            plan = json.load(plan_file)
+        plan['source_hash'] = expected_hash
+        with open(plan_path, 'w', encoding='utf-8') as plan_file:
+            json.dump(plan, plan_file)
+        with open(os.path.join(first.result.project_path, 'activity.py'),
+                  'a', encoding='utf-8') as source_file:
+            source_file.write('\n# external-tamper\n')
+
+        self.service.register_provider(_RefinementProvider())
+        second_job = self.service.submit_activity(
+            spec,
+            provider_name='openai',
+            output_root=self.project_root,
+            session_id=first.session_id,
+            parent_revision_id=first.result_summary['revision_id'],
+        )
+        second = self._wait_for_terminal(second_job.job_id)
+
+        self.assertEqual(STATUS_FAILED, second.status)
+        self.assertIn('source lineage', second.error)
+
+    def test_pipeline_error_after_cancel_is_reported_as_cancelled(self):
+        # A cancellation that surfaces as a pipeline error (e.g. raised out of
+        # the repair loop or a provider call after cancel) must be recorded as
+        # cancelled, not as a spurious failure.
+        started = threading.Event()
+        release = threading.Event()
+
+        class _CancelAwareProvider:
+            name = 'openai'
+            label = 'OpenAI'
+            model = 'cancel-1'
+
+            def generate_plan(self, system_prompt, user_prompt, timeout=45):
+                started.set()
+                release.wait(5)
+                raise ProviderError('provider failed after cancel')
+
+        self.service.register_provider(_CancelAwareProvider())
+        spec = ActivitySpec(
+            'Cancel Demo', 'Create a quiz.', 'logic_math', 'MIT')
+        job = self.service.submit_activity(
+            spec, provider_name='openai', output_root=self.project_root)
+
+        self.assertTrue(started.wait(5))
+        self.service.cancel_job(job.job_id)
+        release.set()
+
+        finished = self._wait_for_terminal(job.job_id)
+        self.assertEqual(STATUS_CANCELLED, finished.status)
 
     def _wait_for_terminal(self, job_id):
         deadline = time.time() + 10
@@ -338,6 +498,28 @@ class _RuntimeProvider:
         return render_activity_source(
             spec,
             enrich_plan(spec, self.generate_plan('', '')),
+        )
+
+
+class _RefinementProvider:
+    name = 'openai'
+    label = 'OpenAI'
+    model = 'repair-test'
+
+    def generate_plan(self, system_prompt, user_prompt, timeout=45):
+        return {}
+
+    def generate_text(self, system_prompt, user_prompt, timeout=120,
+                      stream_callback=None):
+        if 'editing an existing Sugar activity' not in system_prompt:
+            raise AssertionError('Expected refinement patch prompt')
+        return (
+            '<<<<<<< SEARCH\n'
+            'class GeneratedActivity(activity.Activity):\n'
+            '=======\n'
+            'class GeneratedActivity(activity.Activity):\n'
+            '    # switch-student repair marker\n'
+            '>>>>>>> REPLACE'
         )
 
 

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import json
+import hashlib
 import os
 import shutil
 import tempfile
@@ -13,6 +14,8 @@ from generation.generator import enrich_plan
 from llm.providers import ProviderError
 from generation.pipeline import generate_activity
 from generation.pipeline import PipelineError
+from generation.pipeline import refine_activity
+from generation.pipeline import _request_initial_activity_source
 from core.spec import ActivitySpec
 from generation.templates import render_activity_source
 
@@ -95,35 +98,91 @@ class _StreamingCodegenProvider(_FakeProvider):
 class _RetryCodegenProvider(_FakeProvider):
 
     def __init__(self, source):
-        self.source = source
+        self.source = source.replace(
+            'class GeneratedActivity(activity.Activity):',
+            'class GeneratedActivity(object):',
+            1,
+        )
+        assert self.source != source
         self.codegen_calls = 0
+        self.repair_calls = 0
 
     def generate_activity_source(self, system_prompt, user_prompt,
                                  timeout=90):
         self.codegen_calls += 1
-        if self.codegen_calls == 1:
-            return 'class NotActivity:\n    pass\n'
+        return self.source
+
+    def generate_text(self, system_prompt, user_prompt, timeout=120,
+                      stream_callback=None):
+        self.repair_calls += 1
         if 'Generated source must define exactly one Activity subclass.' \
                 not in user_prompt:
             raise AssertionError('Missing validation feedback')
-        return self.source
+        return (
+            '<<<<<<< SEARCH\n'
+            'class GeneratedActivity(object):\n'
+            '=======\n'
+            'class GeneratedActivity(activity.Activity):\n'
+            '>>>>>>> REPLACE'
+        )
 
 
 class _QualityRetryCodegenProvider(_FakeProvider):
 
-    def __init__(self, generic_source, specific_source):
-        self.generic_source = generic_source
-        self.specific_source = specific_source
+    def __init__(self, source, search, replace):
+        self.source = source
+        self.search = search
+        self.replace = replace
         self.codegen_calls = 0
+        self.repair_calls = 0
 
     def generate_activity_source(self, system_prompt, user_prompt,
                                  timeout=90):
         self.codegen_calls += 1
-        if self.codegen_calls == 1:
-            return self.generic_source
+        return self.source
+
+    def generate_text(self, system_prompt, user_prompt, timeout=120,
+                      stream_callback=None):
+        self.repair_calls += 1
         if 'Drawing requests must use a Gtk.DrawingArea' not in user_prompt:
             raise AssertionError('Missing prompt-specific validation feedback')
-        return self.specific_source
+        return (
+            '<<<<<<< SEARCH\n%s\n=======\n%s\n>>>>>>> REPLACE'
+            % (self.search, self.replace)
+        )
+
+
+class _FullRegenRepairProvider(_RetryCodegenProvider):
+
+    def generate_text(self, system_prompt, user_prompt, timeout=120,
+                      stream_callback=None):
+        self.repair_calls += 1
+        return 'FULLREGEN'
+
+
+class _InterruptedStreamingRepairProvider(_RetryCodegenProvider):
+
+    def generate_activity_source(self, system_prompt, user_prompt,
+                                 timeout=90, stream_callback=None):
+        self.codegen_calls += 1
+        if stream_callback is not None:
+            stream_callback(self.source)
+        raise ProviderError('stream disconnected after source')
+
+
+class _LeakyStreamingProvider(_FakeProvider):
+
+    def __init__(self, source, secret):
+        self.source = source + '\n# leaked-value: %s\n' % secret
+        self.api_key = secret
+        self.codegen_calls = 0
+
+    def generate_activity_source(self, system_prompt, user_prompt,
+                                 timeout=90, stream_callback=None):
+        self.codegen_calls += 1
+        if stream_callback is not None:
+            stream_callback(self.source)
+        return self.source
 
 
 class _RuntimeCrashRetryProvider(_FakeProvider):
@@ -139,15 +198,43 @@ class _RuntimeCrashRetryProvider(_FakeProvider):
         )
         assert self.crashing_source != clean_source
         self.codegen_calls = 0
-        self.observed_retry_prompts = []
+        self.repair_calls = 0
+        self.observed_repair_prompts = []
 
     def generate_activity_source(self, system_prompt, user_prompt,
                                  timeout=90):
         self.codegen_calls += 1
-        if self.codegen_calls == 1:
-            return self.crashing_source
-        self.observed_retry_prompts.append(user_prompt)
-        return self.clean_source
+        return self.crashing_source
+
+    def generate_text(self, system_prompt, user_prompt, timeout=120,
+                      stream_callback=None):
+        self.repair_calls += 1
+        self.observed_repair_prompts.append(user_prompt)
+        return (
+            '<<<<<<< SEARCH\n'
+            '        self._build_canvas()\n'
+            '        raise RuntimeError("boom-at-runtime")\n'
+            '=======\n'
+            '        self._build_canvas()\n'
+            '>>>>>>> REPLACE'
+        )
+
+
+class _SequencedRefineProvider(_FakeProvider):
+    model = 'repair-sequence-1'
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.repair_calls = 0
+        self.prompts = []
+
+    def generate_text(self, system_prompt, user_prompt, timeout=120,
+                      stream_callback=None):
+        self.repair_calls += 1
+        self.prompts.append((system_prompt, user_prompt))
+        if not self.responses:
+            raise AssertionError('Unexpected extra repair request')
+        return self.responses.pop(0)
 
 
 class _CriticOkProvider(_CodegenProvider):
@@ -231,6 +318,12 @@ class _EnhancingCodegenProvider(_CodegenProvider):
 class TestAodPipeline(unittest.TestCase):
 
     def setUp(self):
+        self._feature_flags = mock.patch.dict(os.environ, {
+            'AOD_RUNTIME_CHECK': 'off',
+            'AOD_CRITIC': 'off',
+            'AOD_AI_ICON': 'off',
+        })
+        self._feature_flags.start()
         self.output_root = tempfile.mkdtemp(prefix='aod-pipeline-test-')
         self.spec = ActivitySpec(
             'Fraction Quest',
@@ -241,6 +334,7 @@ class TestAodPipeline(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.output_root)
+        self._feature_flags.stop()
 
     def test_provider_plan_runs_end_to_end(self):
         events = []
@@ -264,12 +358,25 @@ class TestAodPipeline(unittest.TestCase):
         )
         self.assertTrue(os.path.isfile(result.bundle_path))
         self.assertEqual('ready', events[-1][0])
+        fractions = [event[1] for event in events]
+        self.assertEqual(sorted(fractions), fractions)
 
         with open(
                 os.path.join(result.project_path, 'aod_plan.json'),
                 encoding='utf-8') as plan_file:
             saved_plan = json.load(plan_file)
         self.assertEqual('fake', saved_plan['provider'])
+
+    def test_initial_source_adapter_ignores_positional_only_optionals(self):
+        def generate_source(system_prompt, user_prompt,
+                            stream_callback=None, max_output_tokens=None, /):
+            self.assertIsNone(stream_callback)
+            self.assertIsNone(max_output_tokens)
+            return 'candidate source'
+
+        source = _request_initial_activity_source(
+            generate_source, 'system', 'user', lambda value: None, 4000)
+        self.assertEqual('candidate source', source)
 
     def test_short_prompt_is_enhanced_before_planning(self):
         events = []
@@ -430,11 +537,20 @@ class TestAodPipeline(unittest.TestCase):
             self.spec,
             self.output_root,
             provider=provider,
+            enhance=False,
         )
 
         self.assertEqual('provider', result.plan['code_source'])
-        self.assertEqual(2, provider.codegen_calls)
-        self.assertEqual(2, result.plan['codegen_attempts'])
+        self.assertEqual(1, provider.codegen_calls)
+        self.assertEqual(1, provider.repair_calls)
+        self.assertEqual(1, result.plan['codegen_attempts'])
+        self.assertEqual(1, result.plan['repair_attempts'])
+        self.assertEqual('repaired', result.plan['repair_status'])
+        stored_events = result.plan['repair_history']
+        self.assertTrue(any(event.get('patch_hashes')
+                            for event in stored_events))
+        self.assertTrue(all('patches' not in event
+                            for event in stored_events))
 
     def test_provider_codegen_failure_fails_without_template_fallback(self):
         with self.assertRaises(PipelineError) as raised:
@@ -444,9 +560,77 @@ class TestAodPipeline(unittest.TestCase):
                 provider=_FailingCodegenProvider(),
             )
 
-        self.assertIn('Provider could not generate valid activity code',
+        self.assertIn('Provider could not repair activity code',
                       str(raised.exception))
         self.assertIn('codegen offline for test', str(raised.exception))
+
+    def test_failed_candidate_never_regenerates_or_uses_template_fallback(
+            self):
+        events = []
+        provider = _FullRegenRepairProvider(
+            _valid_activity_source(self.spec))
+
+        with self.assertRaises(PipelineError) as raised:
+            generate_activity(
+                self.spec,
+                self.output_root,
+                provider=provider,
+                enhance=False,
+                template_fallback=True,
+                progress_cb=lambda *event: events.append(event),
+            )
+
+        self.assertIn('could not repair activity code',
+                      str(raised.exception).lower())
+        self.assertEqual(1, provider.codegen_calls)
+        self.assertGreaterEqual(provider.repair_calls, 1)
+        initial_sources = [
+            event[3]['draft_activity_source']
+            for event in events
+            if len(event) == 4 and isinstance(event[3], dict) and
+            event[3].get('initial_activity_source')
+        ]
+        self.assertEqual(1, len(initial_sources))
+        self.assertIn('class GeneratedActivity(object):', initial_sources[0])
+        self.assertFalse(os.listdir(self.output_root))
+
+    def test_interrupted_stream_repairs_preserved_candidate(self):
+        provider = _InterruptedStreamingRepairProvider(
+            _valid_activity_source(self.spec))
+
+        result = generate_activity(
+            self.spec,
+            self.output_root,
+            provider=provider,
+            enhance=False,
+            template_fallback=True,
+        )
+
+        self.assertEqual(1, provider.codegen_calls)
+        self.assertEqual(1, provider.repair_calls)
+        self.assertEqual('provider', result.plan['code_source'])
+        self.assertEqual('repaired', result.plan['repair_status'])
+        self.assertIn('class GeneratedActivity(activity.Activity):',
+                      result.files['activity.py'])
+
+    def test_streamed_and_final_source_redact_public_api_key(self):
+        secret = 'public-provider-secret-key'
+        provider = _LeakyStreamingProvider(
+            _valid_activity_source(self.spec), secret)
+        events = []
+
+        result = generate_activity(
+            self.spec,
+            self.output_root,
+            provider=provider,
+            enhance=False,
+            progress_cb=lambda *event: events.append(event),
+        )
+
+        self.assertNotIn(secret, result.files['activity.py'])
+        self.assertNotIn(secret, json.dumps(result.plan))
+        self.assertNotIn(secret, repr(events))
+        self.assertIn('[redacted]', result.files['activity.py'])
 
     def test_provider_codegen_streams_partial_source_to_progress_cb(self):
         source = _valid_activity_source(self.spec)
@@ -514,12 +698,6 @@ class TestAodPipeline(unittest.TestCase):
             'creation',
             'MIT',
         )
-        generic_plan = enrich_plan(spec, {
-            'template': 'narrative',
-            'summary': 'A generic writing activity.',
-            'learner_goal': 'Write together.',
-            'learner_steps': ['Write', 'Share'],
-        })
         specific_plan = enrich_plan(spec, {
             'template': 'canvas',
             'summary': 'A drawing canvas for Student A and Student B.',
@@ -527,20 +705,25 @@ class TestAodPipeline(unittest.TestCase):
             'learner_steps': ['Student A draws', 'Student B draws'],
             'interaction_model': 'Students switch turns and draw together.',
         })
+        specific_source = render_activity_source(spec, specific_plan) + \
+            '\n# Student A and Student B switch turns together.\n'
+        broken_line = '        self._drawing = Gtk.Box()'
+        fixed_line = '        self._drawing = Gtk.DrawingArea()'
+        broken_source = specific_source.replace(fixed_line, broken_line, 1)
+        self.assertNotEqual(specific_source, broken_source)
         provider = _QualityRetryCodegenProvider(
-            render_activity_source(spec, generic_plan),
-            render_activity_source(spec, specific_plan) +
-            '\n# Student A and Student B switch turns together.\n',
-        )
+            broken_source, broken_line, fixed_line)
 
         result = generate_activity(
             spec,
             self.output_root,
             provider=provider,
+            enhance=False,
         )
 
         self.assertEqual('provider', result.plan['code_source'])
-        self.assertEqual(2, provider.codegen_calls)
+        self.assertEqual(1, provider.codegen_calls)
+        self.assertEqual(1, provider.repair_calls)
         self.assertIn('DrawingArea', result.files['activity.py'])
 
     def test_critic_round_runs_after_accepted_source(self):
@@ -599,24 +782,166 @@ class TestAodPipeline(unittest.TestCase):
                 provider=provider,
             )
         self.assertEqual('skipped: disabled', result.plan['runtime_check'])
+        self.assertEqual('runtime_unverified',
+                         result.plan['verification_status'])
 
-    @unittest.skipUnless(
-        os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'),
-        'needs a display')
+    def test_refinement_repairs_invalid_patch_without_full_generation(self):
+        current_plan = enrich_plan(
+            self.spec,
+            _FakeProvider().generate_plan('Sugar Activity API reference', ''),
+        )
+        current_source = _valid_activity_source(self.spec)
+        # The repair provider is deliberately BLIND to the requested marker:
+        # its repair patch only fixes the broken base class.  The requested
+        # change must still survive because repair continues from the
+        # candidate that carried it, not from the pristine parent.
+        provider = _SequencedRefineProvider([
+            # First refinement patch carries the requested marker but breaks
+            # static validation (the subclass is dropped), so its gate fails.
+            (
+                '<<<<<<< SEARCH\n'
+                'class GeneratedActivity(activity.Activity):\n'
+                '=======\n'
+                'class GeneratedActivity(object):\n'
+                '    # requested-refinement-marker\n'
+                '>>>>>>> REPLACE'
+            ),
+            # Repair patch restores the subclass only; it never re-emits the
+            # marker.  A pre-fix repair (reset to parent) would silently lose
+            # the change and this SEARCH would not even match the parent.
+            (
+                '<<<<<<< SEARCH\n'
+                'class GeneratedActivity(object):\n'
+                '=======\n'
+                'class GeneratedActivity(activity.Activity):\n'
+                '>>>>>>> REPLACE'
+            ),
+        ])
+
+        with mock.patch.dict(os.environ, {'AOD_RUNTIME_CHECK': 'off'}):
+            result = refine_activity(
+                self.spec,
+                current_source,
+                current_plan,
+                self.output_root,
+                provider=provider,
+                package_bundle=False,
+            )
+
+        self.assertEqual(2, provider.repair_calls)
+        self.assertEqual('repair_loop', result.plan['refine_method'])
+        self.assertEqual(1, result.plan['repair_attempts'])
+        final_source = result.files['activity.py']
+        self.assertIn('# requested-refinement-marker', final_source)
+        self.assertIn('class GeneratedActivity(activity.Activity):',
+                      final_source)
+        self.assertNotIn('class GeneratedActivity(object):', final_source)
+        self.assertEqual(
+            _source_digest(current_source),
+            result.plan['parent_source_hash'],
+        )
+        # The repair prompt states the requested change so a real model could
+        # re-derive it rather than only chasing the diagnostics.
+        self.assertIn(self.spec.prompt, provider.prompts[1][1])
+
+    def test_refinement_refuses_complete_file_patch_then_repairs_parent(self):
+        current_plan = enrich_plan(
+            self.spec,
+            _FakeProvider().generate_plan('Sugar Activity API reference', ''),
+        )
+        current_source = _valid_activity_source(self.spec)
+        replacement = current_source.replace(
+            '# provider-codegen-marker', '# forbidden-whole-file-marker')
+        whole_file_response = (
+            '<<<<<<< SEARCH\n%s\n=======\n%s\n>>>>>>> REPLACE'
+            % (current_source.rstrip(), replacement.rstrip())
+        )
+        focused_response = (
+            '<<<<<<< SEARCH\n'
+            'class GeneratedActivity(activity.Activity):\n'
+            '=======\n'
+            'class GeneratedActivity(activity.Activity):\n'
+            '    # focused-repair-marker\n'
+            '>>>>>>> REPLACE'
+        )
+        provider = _SequencedRefineProvider([
+            whole_file_response, focused_response])
+
+        result = refine_activity(
+            self.spec,
+            current_source,
+            current_plan,
+            self.output_root,
+            provider=provider,
+            package_bundle=False,
+        )
+
+        self.assertEqual(2, provider.repair_calls)
+        self.assertNotIn('# forbidden-whole-file-marker',
+                         result.files['activity.py'])
+        self.assertIn('# focused-repair-marker', result.files['activity.py'])
+
+    def test_refinement_refuses_credential_bearing_patch(self):
+        current_plan = enrich_plan(
+            self.spec,
+            _FakeProvider().generate_plan('Sugar Activity API reference', ''),
+        )
+        current_source = _valid_activity_source(self.spec)
+        secret = 'refinement-secret-key'
+        provider = _SequencedRefineProvider([
+            (
+                '<<<<<<< SEARCH\n'
+                'class GeneratedActivity(activity.Activity):\n'
+                '=======\n'
+                'class GeneratedActivity(activity.Activity):\n'
+                '    # %s\n'
+                '>>>>>>> REPLACE' % secret
+            ),
+            (
+                '<<<<<<< SEARCH\n'
+                'class GeneratedActivity(activity.Activity):\n'
+                '=======\n'
+                'class GeneratedActivity(activity.Activity):\n'
+                '    # safe-refinement-marker\n'
+                '>>>>>>> REPLACE'
+            ),
+        ])
+        provider.api_key = secret
+
+        result = refine_activity(
+            self.spec,
+            current_source,
+            current_plan,
+            self.output_root,
+            provider=provider,
+            package_bundle=False,
+        )
+
+        self.assertNotIn(secret, result.files['activity.py'])
+        self.assertNotIn(secret, json.dumps(result.plan))
+        self.assertIn('# safe-refinement-marker', result.files['activity.py'])
+
     def test_provider_codegen_retries_after_runtime_crash(self):
         provider = _RuntimeCrashRetryProvider(
             _valid_activity_source(self.spec))
-        with mock.patch.dict(os.environ, {'AOD_RUNTIME_CHECK': 'on'}):
+        with mock.patch(
+                'generation.pipeline.run_runtime_check',
+                side_effect=[
+                    (False, 'boom-at-runtime during startup'),
+                    (True, 'passed'),
+                ]):
             result = generate_activity(
                 self.spec,
                 self.output_root,
                 provider=provider,
+                enhance=False,
             )
-        self.assertEqual(2, provider.codegen_calls)
-        self.assertIn('crashed when run',
-                      provider.observed_retry_prompts[0])
+        self.assertEqual(1, provider.codegen_calls)
+        self.assertEqual(1, provider.repair_calls)
+        self.assertIn('runtime_check',
+                      provider.observed_repair_prompts[0])
         self.assertIn('boom-at-runtime',
-                      provider.observed_retry_prompts[0])
+                      provider.observed_repair_prompts[0])
         self.assertEqual('provider', result.plan['code_source'])
         self.assertEqual('passed', result.plan['runtime_check'])
 
@@ -629,3 +954,7 @@ def _valid_activity_source(spec):
         'learner_steps': ['Try', 'Explain', 'Share'],
     })
     return render_activity_source(spec, plan) + '\n# provider-codegen-marker\n'
+
+
+def _source_digest(source):
+    return hashlib.sha256(source.encode('utf-8')).hexdigest()

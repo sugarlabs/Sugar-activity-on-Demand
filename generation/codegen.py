@@ -29,7 +29,8 @@ _CODE_SIZE_INSTRUCTIONS = {
         'token limit. Include rich toolbar actions, keyboard shortcuts, '
         'multiple screens/modes, full Journal persistence, edge-case '
         'handling, and detailed visual polish. 1500+ lines is expected for '
-        'anything non-trivial. Do not stop until the activity is production-ready.'
+        'anything non-trivial. Do not stop until the activity is '
+        'production-ready.'
     ),
 }
 
@@ -75,7 +76,8 @@ def _rendering_guidance():
     )
 
 
-def build_codegen_system_prompt(spec, plan, references=(), code_size='standard'):
+def build_codegen_system_prompt(
+        spec, plan, references=(), code_size='standard'):
     """Build the provider prompt for a complete Sugar activity.py file."""
     return (
         'You are Sugar Activity on Demand, a code generator for Sugar '
@@ -158,9 +160,9 @@ def build_codegen_system_prompt(spec, plan, references=(), code_size='standard')
         'allocation), never hardcoded small pixel sizes. On a large screen '
         'the play area should use most of the window, centered, with '
         'square cells staying square.\n'
-        '- If the structured request includes "Current activity.py excerpt", '
-        'this is a refinement. Preserve working behavior from that source '
-        'and apply the requested change directly in the regenerated source.\n'
+        '- This prompt is only for the first complete activity.py.  Later '
+        'validation failures and refinements are handled with focused '
+        'SEARCH/REPLACE repairs; never replace an existing file here.\n'
         '- Use only classroom-safe local state. No networking, subprocesses, '
         'or arbitrary filesystem access.\n'
         '- Keep the UI useful on 1024x768 screens.\n'
@@ -247,8 +249,7 @@ def build_codegen_user_prompt(spec, plan, validation_feedback=''):
     feedback_block = ''
     if validation_feedback:
         feedback_block = (
-            '\n\nPrevious generated source failed validation. Fix these '
-            'issues and return a corrected complete activity.py:\n%s'
+            '\n\nAdditional requirements for this one initial source:\n%s'
             % validation_feedback
         )
     return (

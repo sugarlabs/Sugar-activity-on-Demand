@@ -552,6 +552,11 @@ def normalize_plan(spec, plan):
             'codegen_provider',
             'codegen_model',
             'codegen_fallback_reason',
+            'repair_status',
+            'original_source_hash',
+            'parent_source_hash',
+            'source_hash',
+            'verification_status',
             'refine_method',
             'original_prompt',
             'enhanced_prompt',
@@ -566,9 +571,26 @@ def normalize_plan(spec, plan):
     if plan.get('bundle_id'):
         normalized['bundle_id'] = plan['bundle_id']
 
-    attempts = plan.get('codegen_attempts')
-    if isinstance(attempts, int):
-        normalized['codegen_attempts'] = attempts
+    for field in ('codegen_attempts', 'repair_attempts'):
+        attempts = plan.get(field)
+        if isinstance(attempts, int):
+            normalized[field] = attempts
+
+    repair_history = plan.get('repair_history')
+    if isinstance(repair_history, list):
+        # Repair events contain only JSON-safe diagnostic data assembled by
+        # the pipeline.  Preserve a bounded history in aod_plan.json so a
+        # successful activity remains explainable without bloating projects.
+        clean_history = []
+        for event in repair_history[-100:]:
+            if not isinstance(event, dict):
+                continue
+            clean_event = dict(event)
+            patches = clean_event.pop('patches', None)
+            if isinstance(patches, list):
+                clean_event.setdefault('patch_count', len(patches))
+            clean_history.append(clean_event)
+        normalized['repair_history'] = clean_history
 
     for field in ('chess_show_move_log',):
         value = plan.get(field)
@@ -589,7 +611,11 @@ def assemble_project(spec, plan, output_root, activity_source=None):
     os.makedirs(activity_path)
 
     license_info = get_license(spec.license_id)
-    source = activity_source or render_activity_source(spec, plan)
+    # Only None means "use the local renderer".  An empty or otherwise
+    # invalid provider candidate must stay visible as a failure; silently
+    # replacing it with a template would violate the repair-only contract.
+    source = (render_activity_source(spec, plan)
+              if activity_source is None else activity_source)
     files = {
         'activity.py': source,
         'setup.py': _SETUP_SOURCE,
@@ -833,7 +859,8 @@ def _carrom_template_score(prompt, words):
         'rebound', 'flick', 'flicking', 'foul', 'fouls',
     }
     score = len(words.intersection(carrom_words))
-    if score and {'board', 'game', 'score', 'scoring', 'turn', 'turns'} & words:
+    board_words = {'board', 'game', 'score', 'scoring', 'turn', 'turns'}
+    if score and board_words & words:
         return 2 + score
     return 0
 

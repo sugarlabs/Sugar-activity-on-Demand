@@ -22,6 +22,9 @@ import os
 
 from generation.refine import apply_patches
 from generation.refine import parse_search_replace
+from generation.repair_loop import patches_match_uniquely
+from generation.repair_loop import patches_replace_whole_file
+from generation.repair_loop import response_contains_only_patches
 from generation.runtime_check import run_runtime_check
 from generation.validator import validate_activity_source_for_request
 
@@ -56,8 +59,8 @@ def build_critic_system_prompt():
         '- Keep each SEARCH block small but unique (3-10 lines).\n'
         '- Fix only real defects from the list above.  Do NOT restyle, '
         'rename, or rewrite working code.\n'
-        '- FULLREGEN is not allowed here.  If you cannot express a fix '
-        'as small SEARCH/REPLACE blocks, reply OK instead.\n'
+        '- FULLREGEN is not allowed here.  Never reply OK when a defect '
+        'exists; express the highest-priority fix as focused patches.\n'
         '- Preserve all Sugar Activity patterns: ToolbarBox, '
         'StopButton, set_canvas, read_file/write_file, Journal '
         'persistence.\n'
@@ -113,11 +116,21 @@ def run_critic_round(provider, spec, plan, source, warnings=None):
             build_critic_user_prompt(spec, plan, source, warnings),
         )
     except Exception as error:
-        logging.warning('Critic call failed: %s', error)
+        logging.warning('Critic call failed: %s',
+                        _redact_provider_error(error, provider))
         return source
 
-    if not isinstance(response, str) or response.strip() == 'OK':
+    if not isinstance(response, str):
+        logging.warning('Critic returned a non-text response')
+        return source
+    if response.strip() == 'OK':
         plan['critic'] = 'ok'
+        return source
+    if any(secret in response for secret in _provider_secrets(provider)):
+        logging.warning('Critic reply contained credential material')
+        return source
+    if not response_contains_only_patches(response):
+        logging.warning('Critic reply contained non-patch protocol text')
         return source
 
     try:
@@ -126,6 +139,12 @@ def run_critic_round(provider, spec, plan, source, warnings=None):
         logging.warning('Critic reply was not OK or valid patches')
         return source
     if patches is None:  # FULLREGEN — forbidden for the critic.
+        return source
+    if patches_replace_whole_file(source, patches):
+        logging.warning('Critic attempted a whole-file replacement')
+        return source
+    if not patches_match_uniquely(source, patches):
+        logging.warning('Critic patch anchors were missing or ambiguous')
         return source
 
     patched, applied, failed = apply_patches(source, patches)
@@ -146,3 +165,19 @@ def run_critic_round(provider, spec, plan, source, warnings=None):
 
     plan['critic'] = 'patched:%d' % applied
     return patched
+
+
+def _provider_secrets(provider):
+    values = []
+    for name in ('_api_key', 'api_key'):
+        value = getattr(provider, name, '')
+        if isinstance(value, str) and value:
+            values.append(value)
+    return values
+
+
+def _redact_provider_error(error, provider):
+    message = str(error)
+    for secret in _provider_secrets(provider):
+        message = message.replace(secret, '[redacted]')
+    return message

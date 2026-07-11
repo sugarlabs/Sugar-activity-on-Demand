@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import json
+import hashlib
 import logging
 import os
 import threading
@@ -159,7 +160,8 @@ class AODService:
                 status['name']
             ) if status['name'] in (
                 'gemini', 'openai', 'deepseek', 'qwen', 'moonshot',
-                'opencode', 'opencode-go', 'freemodel', 'claude', 'ollama') else {}
+                'opencode', 'opencode-go', 'freemodel', 'claude', 'ollama'
+            ) else {}
             ollama_configured = status['name'] == 'ollama' and any((
                 credentials.get('model'),
                 credentials.get('endpoint'),
@@ -254,6 +256,7 @@ class AODService:
             if not job.is_terminal():
                 job.fail('Sugar restarted before this job finished.')
                 self._store.save(job)
+                self._record_failed_message(job)
             elif job.status == STATUS_FINISHED:
                 try:
                     job.result = restore_generation_result(
@@ -369,16 +372,24 @@ class AODService:
                     pace=True,
                     package_bundle=False,
                     enhance=job.enhance,
+                    cancel_check=lambda: job.cancel_requested,
                 )
         except JobCancelled:
             self._mark_cancelled(job)
             return
         except Exception as error:
+            if job.cancel_requested:
+                # Cancellation during the repair loop can surface as a pipeline
+                # error rather than JobCancelled; honour the cancel instead of
+                # reporting a spurious failure.
+                self._mark_cancelled(job)
+                return
             logging.exception('Activity-on-Demand job failed')
             self._mark_failed(job, error)
             return
         except BaseException as error:
-            logging.exception('Activity-on-Demand worker received fatal signal')
+            logging.exception(
+                'Activity-on-Demand worker received fatal signal')
             self._mark_failed(job, error)
             raise
 
@@ -413,28 +424,13 @@ class AODService:
         self._set_progress(job, status, stage, fraction, message, metadata)
 
     def _run_refinement_job(self, job, provider):
-        """Run a refinement using SEARCH/REPLACE + full-regen fallback.
+        """Run a refinement using repair-only SEARCH/REPLACE transactions.
 
-        For LLM providers, tries cheap SEARCH/REPLACE blocks before
-        falling back to full regen.  For local-template, falls back
-        to the standard generation pipeline.
+        Every refinement edits the parent source with SEARCH/REPLACE blocks.
+        A local-template job cannot understand an arbitrary edit request, so
+        it fails explicitly instead of silently replacing the parent with a
+        newly rendered activity.
         """
-        if job.provider_name in ('local', 'local-template') and \
-                provider is None:
-            return generate_activity(
-                job.spec,
-                output_root=job.output_root or None,
-                provider=None,
-                provider_name='local-template',
-                use_rag=job.use_rag,
-                validate_code=job.validate_code,
-                progress_cb=lambda stage, fraction, message, metadata=None:
-                    self._pipeline_progress(
-                        job, stage, fraction, message, metadata),
-                pace=True,
-                package_bundle=False,
-            )
-
         from generation.pipeline import refine_activity
         from generation.pipeline import PipelineError
 
@@ -470,12 +466,41 @@ class AODService:
                 'Could not read the current activity.py for refinement.'
             )
 
+        actual_source_hash = hashlib.sha256(
+            current_source.encode('utf-8')).hexdigest()
+
+        if job.provider_name in ('local', 'local-template') and \
+                provider is None:
+            self._pipeline_progress(
+                job,
+                'generating',
+                0.10,
+                'Preserving the parent source; patch repair needs a model',
+                {
+                    'draft_activity_source': current_source,
+                    'initial_activity_source': True,
+                },
+            )
+            raise PipelineError(
+                'Refinement needs a configured model that supports patch '
+                'repair. The existing activity was preserved and was not '
+                'regenerated.'
+            )
+
         plan_path = os.path.join(project_path, 'aod_plan.json')
         try:
             with open(plan_path, encoding='utf-8') as f:
                 current_plan = json.load(f)
         except (OSError, ValueError):
             current_plan = {}
+
+        expected_source_hash = current_plan.get(
+            'source_hash', summary.get('source_hash', ''))
+        if expected_source_hash and actual_source_hash != expected_source_hash:
+            raise PipelineError(
+                'Parent activity.py changed after its revision was saved. '
+                'Refinement stopped to preserve source lineage.'
+            )
 
         return refine_activity(
             job.spec,
@@ -490,6 +515,7 @@ class AODService:
             pace=True,
             package_bundle=False,
             validate_code=job.validate_code,
+            cancel_check=lambda: job.cancel_requested,
         )
 
     def _set_progress(self, job, status, stage, progress, message,
@@ -500,14 +526,41 @@ class AODService:
                 draft_source = metadata.get('draft_activity_source')
                 if isinstance(draft_source, str) and draft_source:
                     job.draft_activity_source = draft_source
+                    if metadata.get('initial_activity_source') and \
+                            not job.original_activity_source:
+                        job.original_activity_source = draft_source
                 enhanced = metadata.get('enhanced_prompt')
                 if isinstance(enhanced, str) and enhanced:
                     job.enhanced_prompt = enhanced
+                repair_event = metadata.get('repair_event')
+                if isinstance(repair_event, dict):
+                    # Keep diagnostics bounded: repair histories are useful
+                    # after a failed job, but must not grow without limit on
+                    # a long-running repair session.
+                    job.repair_history.append(dict(repair_event))
+                    job.repair_history = job.repair_history[-100:]
+                repair_diagnostics = metadata.get('repair_diagnostics')
+                if isinstance(repair_diagnostics, dict):
+                    job.repair_diagnostics = dict(repair_diagnostics)
             self._store.save(job)
         self._notify(job)
 
     def _mark_failed(self, job, error):
         with self._lock:
+            preserved_source = getattr(error, 'source', '')
+            if isinstance(preserved_source, str) and preserved_source:
+                job.draft_activity_source = preserved_source
+                if not job.original_activity_source:
+                    job.original_activity_source = preserved_source
+            diagnostics = getattr(error, 'diagnostics', None)
+            if isinstance(diagnostics, dict):
+                job.repair_diagnostics = dict(diagnostics)
+            history = getattr(error, 'repair_history', None)
+            if isinstance(history, list) and not job.repair_history:
+                job.repair_history = [
+                    dict(event) for event in history[-100:]
+                    if isinstance(event, dict)
+                ]
             job.fail(error)
             self._store.save(job)
         self._record_failed_message(job)

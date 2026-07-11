@@ -10,12 +10,10 @@ SEARCH/REPLACE blocks.  This cuts output tokens from ~12k to ~1k per
 refinement, making classroom iteration 10-20x cheaper and faster.
 
 If any SEARCH block does not match the current source (the model
-hallucinated a line, or the change is too large for a small diff),
-the caller falls back to full regeneration.
+hallucinated a line, or the change is too large for a small diff), the
+caller rejects that patch transaction and asks for a corrected patch.  The
+existing source is never discarded in favour of full regeneration.
 """
-
-import re
-
 
 SEARCH_MARKER = '<<<<<<< SEARCH'
 DIVIDER_MARKER = '======='
@@ -57,11 +55,9 @@ def build_refine_system_prompt():
         'sections, use a SEARCH block that matches an anchor line (like '
         'a method definition or the end of a class) and include the new '
         'code in the REPLACE section.\n'
-        '- If the refinement is too large to express as SEARCH/REPLACE '
-        'blocks (e.g. rewriting most of the file), output exactly:\n'
-        'FULLREGEN\n'
-        '...and nothing else.  The system will fall back to full '
-        'regeneration.\n'
+        '- Never output FULLREGEN and never replace the whole file.  Express '
+        'larger edits as several focused SEARCH/REPLACE blocks anchored to '
+        'the existing source.\n'
         '- Preserve all Sugar Activity patterns: ToolbarBox, StopButton, '
         'set_canvas, read_file/write_file, Journal persistence.\n'
         '- Keep the same class name GeneratedActivity.\n'
@@ -90,8 +86,9 @@ def build_refine_user_prompt(current_source, refinement_request,
     parts.append(
         '\n\n---\n\n'
         'Return SEARCH/REPLACE blocks for the changes.  Copy SEARCH '
-        'lines EXACTLY from the source above.  If the change is too '
-        'large, output FULLREGEN.'
+        'lines EXACTLY from the source above.  Never output FULLREGEN or a '
+        'complete replacement file; split larger changes into focused '
+        'blocks.'
     )
     return ''.join(parts)
 
@@ -99,9 +96,10 @@ def build_refine_user_prompt(current_source, refinement_request,
 def parse_search_replace(response):
     """Parse SEARCH/REPLACE blocks from a model response.
 
-    Returns a list of (search, replace) tuples, or None if the model
-    requested FULLREGEN, or raises ValueError if the response is
-    malformed.
+    Returns a list of (search, replace) tuples, or None if a legacy/model
+    response requested the forbidden FULLREGEN escape hatch.  Callers must
+    reject that response rather than regenerating the file.  Raises
+    ValueError when the response is malformed.
     """
     if not isinstance(response, str):
         raise ValueError('Refinement response must be text.')
@@ -156,7 +154,8 @@ def parse_search_replace(response):
         if '<<<<<<<' not in text:
             raise ValueError(
                 'Refinement response did not contain SEARCH/REPLACE '
-                'blocks.  If the change is too large, output FULLREGEN.'
+                'blocks. Return focused exact patches; whole-file '
+                'regeneration is forbidden.'
             )
         raise ValueError(
             'Refinement response contained SEARCH markers but no valid '
@@ -175,8 +174,8 @@ def apply_patches(source, patches):
     indentation.  If any patch fails to match, it is skipped and
     counted in failed_count.
 
-    The caller should check failed_count and fall back to full regen
-    if any patches failed.
+    The caller should reject the entire patch transaction when failed_count
+    is non-zero; it must not fall back to full regeneration.
     """
     lines = source.split('\n')
     applied = 0

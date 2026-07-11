@@ -53,7 +53,10 @@ class AODJob:
     progress: float = 0.0
     message: str = 'Queued'
     result_summary: dict = field(default_factory=dict)
+    original_activity_source: str = ''
     draft_activity_source: str = ''
+    repair_history: list = field(default_factory=list)
+    repair_diagnostics: dict = field(default_factory=dict)
     error: str = ''
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -81,6 +84,12 @@ class AODJob:
 
     @classmethod
     def from_dict(cls, data):
+        repair_history = data.get('repair_history')
+        if not isinstance(repair_history, list):
+            repair_history = []
+        repair_diagnostics = data.get('repair_diagnostics')
+        if not isinstance(repair_diagnostics, dict):
+            repair_diagnostics = {}
         job = cls(
             job_id=data['job_id'],
             spec=ActivitySpec.from_dict(data['spec']),
@@ -98,7 +107,16 @@ class AODJob:
             progress=data.get('progress', 0.0),
             message=data.get('message', ''),
             result_summary=data.get('result_summary', {}),
-            draft_activity_source=data.get('draft_activity_source', ''),
+            original_activity_source=(
+                data.get('original_activity_source', '')
+                if isinstance(data.get('original_activity_source', ''), str)
+                else ''),
+            draft_activity_source=(
+                data.get('draft_activity_source', '')
+                if isinstance(data.get('draft_activity_source', ''), str)
+                else ''),
+            repair_history=repair_history,
+            repair_diagnostics=repair_diagnostics,
             error=data.get('error', ''),
             created_at=data.get('created_at', time.time()),
             updated_at=data.get('updated_at', time.time()),
@@ -126,7 +144,10 @@ class AODJob:
             'progress': self.progress,
             'message': self.message,
             'result_summary': self.result_summary,
+            'original_activity_source': self.original_activity_source,
             'draft_activity_source': self.draft_activity_source,
+            'repair_history': self.repair_history,
+            'repair_diagnostics': self.repair_diagnostics,
             'error': self.error,
             'created_at': self.created_at,
             'updated_at': self.updated_at,
@@ -152,7 +173,8 @@ class AODJob:
             return
         self.status = status
         self.stage = stage
-        self.progress = max(0.0, min(1.0, float(progress)))
+        next_progress = max(0.0, min(1.0, float(progress)))
+        self.progress = max(self.progress, next_progress)
         self.message = message
         self.updated_at = time.time()
 
@@ -240,7 +262,7 @@ class AODJobStore:
 
 
 def result_summary_from_generation(result):
-    return {
+    summary = {
         'activity_name': result.spec.name,
         'bundle_id': result.bundle_id,
         'bundle_path': result.bundle_path,
@@ -250,3 +272,13 @@ def result_summary_from_generation(result):
         'template': result.plan.get('template', ''),
         'code_source': result.plan.get('code_source', 'template'),
     }
+    for name in (
+            'original_source_hash', 'parent_source_hash', 'source_hash',
+            'verification_status'):
+        value = result.plan.get(name)
+        if isinstance(value, str) and value:
+            summary[name] = value
+    repairs = result.plan.get('repair_attempts')
+    if isinstance(repairs, int):
+        summary['repair_attempts'] = repairs
+    return summary

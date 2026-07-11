@@ -67,7 +67,7 @@ No activity data is uploaded for training.
 
 Generated code is not accepted only because it looks correct. Each candidate is validated for syntax, Sugar API usage, import safety, and request alignment.
 
-The activity is then run in a sandboxed subprocess, event-pumped, saved, restored, and checked before it is accepted. Crashes are returned to the model as feedback for retry-and-fix rounds.
+When GTK runtime infrastructure is available, the activity is run in a separate, minimal-environment subprocess, event-pumped, saved, restored, and checked before it is accepted; otherwise the plan explicitly records that runtime verification remains unavailable. The complete file is generated only once. Failures enter a transactional debugging loop that applies focused SEARCH/REPLACE repairs to that same source, rolls back bad patches, and re-runs every acceptance gate. It never discards a failed candidate for full regeneration.
 
 ### Live preview and refinement
 
@@ -210,7 +210,7 @@ The codebase is organized by domain:
 | ------------- | ---------------------------------------------------------- |
 | `core/`       | Specs, licenses, and project models                        |
 | `llm/`        | Providers, credentials, and prompt enhancement             |
-| `generation/` | Pipeline, RAG, code generation, validation, and refinement |
+| `generation/` | Pipeline, RAG, code generation, repair, validation, and refinement |
 | `service/`    | Job queue and sessions                                     |
 | `exports/`    | Flatpak and export logic                                   |
 | `preview/`    | Activity preview runtime                                   |

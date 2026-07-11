@@ -9,6 +9,44 @@ import unittest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+_GTK_SANITIZED_VARS = (
+    'LD_LIBRARY_PATH', 'GTK_PATH', 'GIO_MODULE_DIR',
+    'GDK_PIXBUF_MODULE_FILE', 'GTK_EXE_PREFIX', 'GTK_IM_MODULE_FILE',
+)
+
+
+def _clean_gtk_env():
+    return {
+        key: value for key, value in os.environ.items()
+        if key not in _GTK_SANITIZED_VARS
+    }
+
+
+def _gtk_display_available():
+    if not (os.environ.get('DISPLAY') or
+            os.environ.get('WAYLAND_DISPLAY')):
+        return False
+    probe = (
+        'import gi\n'
+        'gi.require_version("Gtk", "3.0")\n'
+        'from gi.repository import Gtk\n'
+        'result = Gtk.init_check()\n'
+        'available = result[0] if isinstance(result, tuple) else result\n'
+        'raise SystemExit(0 if available else 1)\n'
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, '-c', probe],
+            cwd=REPO_ROOT,
+            env=_clean_gtk_env(),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
 
 class TestStudioDecoupling(unittest.TestCase):
 
@@ -43,6 +81,11 @@ class TestStudioDecoupling(unittest.TestCase):
                 'Provider generated code did not pass validation: '
                 'Drawing requests must use a Gtk.DrawingArea draw '
                 'surface.'))
+        self.assertEqual(
+            'attempt_limit_reached: validation still failed',
+            _clean_generation_error_text(
+                'Provider could not repair activity code: '
+                'attempt_limit_reached: validation still failed'))
         self.assertEqual('plain message',
                          _clean_generation_error_text('plain message'))
         self.assertEqual('', _clean_generation_error_text(None))
@@ -140,18 +183,11 @@ print('OFFSCREEN-HOME-OK')
 
 
 @unittest.skipUnless(
-    os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'),
-    'needs a display server')
+    _gtk_display_available(), 'needs a usable display server')
 class TestStudioOffscreen(unittest.TestCase):
 
     def _run_offscreen(self, script):
-        clean_env = {
-            key: value for key, value in os.environ.items()
-            if key not in ('LD_LIBRARY_PATH', 'GTK_PATH', 'GIO_MODULE_DIR',
-                           'GDK_PIXBUF_MODULE_FILE', 'GTK_EXE_PREFIX',
-                           'GTK_IM_MODULE_FILE')
-        }
-        clean_env['GDK_BACKEND'] = 'x11'
+        clean_env = _clean_gtk_env()
         try:
             return subprocess.run(
                 [sys.executable, '-c', script],
