@@ -76,11 +76,13 @@ def _gtk_theme_exists(name):
 
 
 def _icon_theme_exists(name):
-    candidates = [
-        os.path.join(os.path.expanduser('~/.icons'), name),
-        os.path.join('/usr/share/icons', name),
-    ]
-    return any(os.path.isdir(path) for path in candidates)
+    # Icon themes live under any XDG data dir (so a bundled/AppImage copy in
+    # XDG_DATA_DIRS is found too), plus the user's ~/.icons.
+    data_dirs = os.environ.get(
+        'XDG_DATA_DIRS', '/usr/local/share:/usr/share').split(':')
+    roots = [os.path.expanduser('~/.icons')]
+    roots += [os.path.join(d, 'icons') for d in data_dirs if d]
+    return any(os.path.isdir(os.path.join(root, name)) for root in roots)
 
 
 def run():
