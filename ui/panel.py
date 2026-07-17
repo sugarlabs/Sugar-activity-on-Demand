@@ -55,6 +55,7 @@ from gi.repository import Pango
 from sugar3.graphics import style
 from sugar3.graphics.icon import CanvasIcon
 from sugar3.graphics.icon import Icon
+from sugar3.graphics.icon import _IconBuffer
 
 from ui.ring import HomeRingLayout
 
@@ -1828,10 +1829,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
             progress = Gtk.ProgressBar()
             self._preview_generation_progress = progress
             progress.set_size_request(style.zoom(280), style.zoom(8))
+            progress.set_halign(Gtk.Align.CENTER)
             progress.get_style_context().add_class(
                 'create-ai-generation-progress')
-            self._preview_content_box.pack_start(
-                progress, False, False, style.zoom(6))
+            group.pack_start(progress, False, False, style.zoom(6))
             progress.show()
 
         stage = Gtk.Label()
@@ -1840,8 +1841,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
         stage.set_justify(Gtk.Justification.CENTER)
         stage.set_line_wrap(True)
         stage.set_max_width_chars(60)
-        self._preview_content_box.pack_start(
-            stage, False, False, style.zoom(4))
+        stage.set_margin_top(style.zoom(2))
+        group.pack_start(stage, False, False, style.zoom(4))
         stage.show()
 
         fun = Gtk.Label(self._generation_fun_messages()[0])
@@ -1850,76 +1851,22 @@ class CreateAIActivityPanel(Gtk.EventBox):
         fun.set_justify(Gtk.Justification.CENTER)
         fun.set_line_wrap(True)
         fun.set_max_width_chars(60)
-        self._preview_content_box.pack_start(
-            fun, False, False, style.zoom(2))
+        group.pack_start(fun, False, False, style.zoom(2))
         fun.show()
 
-        steps_box = Gtk.VBox(spacing=style.zoom(8))
-        steps_box.set_margin_top(style.zoom(6))
-        self._preview_content_box.pack_start(
-            steps_box, False, False, 0)
-        steps_box.show()
+        bottom_spacer = Gtk.Box()
+        self._preview_content_box.pack_start(bottom_spacer, True, True, 0)
+        bottom_spacer.show()
 
-        step_defs = [
-            (_('Think'), _('Reading your prompt and planning the activity'),
-             'emblem-question'),
-            (_('Gather'), _('Finding real Sugar activity examples for context'),
-             'system-search'),
-            (_('Write'), _('Writing the Python code for your activity'),
-             'edit-description'),
-            (_('Check'), _('Testing the code and preparing files'),
-             'dialog-ok'),
-            (_('Ready'), _('Packaging your installable activity bundle'),
-             'package_settings'),
-        ]
         self._preview_generation_steps = []
         self._preview_generation_step_boxes = []
-        for label_text, desc_text, icon_name in step_defs:
-            row = Gtk.HBox(spacing=style.zoom(8))
-            row.set_halign(Gtk.Align.START)
-            row.get_style_context().add_class(
-                'create-ai-generation-step-row')
-
-            icon = None
-            try:
-                icon = Icon(icon_name=icon_name,
-                            pixel_size=style.zoom(16))
-            except Exception:
-                icon = Gtk.Label(label_text[0])
-                icon.set_size_request(style.zoom(16), style.zoom(16))
-            row.pack_start(icon, False, False, 0)
-            icon.show()
-
-            text_box = Gtk.VBox(spacing=0)
-            label = Gtk.Label(label_text)
-            label.get_style_context().add_class('create-ai-generation-step')
-            label.set_halign(Gtk.Align.START)
-            text_box.pack_start(label, False, False, 0)
-            label.show()
-
-            desc = Gtk.Label(desc_text)
-            desc.get_style_context().add_class(
-                'create-ai-generation-step-desc')
-            desc.set_halign(Gtk.Align.START)
-            desc.set_line_wrap(True)
-            desc.set_max_width_chars(50)
-            text_box.pack_start(desc, False, False, 0)
-            desc.show()
-
-            row.pack_start(text_box, True, True, 0)
-            text_box.show()
-
-            steps_box.pack_start(row, False, False, 0)
-            row.show()
-            self._preview_generation_steps.append(label)
-            self._preview_generation_step_boxes.append(row)
 
         if canvas is not None:
             # Staggered entrance: each element fades in a beat after
-            # the previous one, driven by the canvas frame tick.
+            # the previous one, driven by the canvas frame tick. The
+            # canvas fades itself in via its own entrance alpha.
             self._generation_fade_widgets = [
-                (xo_icon, 0.0), (title, 0.15), (note, 0.25),
-                (stage, 0.35), (fun, 0.45), (steps_box, 0.55)]
+                (title, 0.12), (percent, 0.22), (bar, 0.30), (fun, 0.42)]
             for widget, _unused in self._generation_fade_widgets:
                 widget.set_opacity(0.0)
 
@@ -4903,11 +4850,11 @@ if clipboard.wait_is_text_available():
 
         xo_icon = self._preview_generation_xo
         if xo_icon is not None and not self._generation_anim_done and \
-                self._generation_tick_count % 2 == 0:
+                self._generation_tick_count % 4 == 0:
             # Drift through the XO color wheel one neighbor at a time,
             # like Sugar's boot pulse — slow enough to feel calm.
             stroke, fill = self._xo_pulse_color(
-                self._generation_tick_count // 2)
+                self._generation_tick_count // 4)
             try:
                 xo_icon.props.stroke_color = stroke
                 xo_icon.props.fill_color = fill
