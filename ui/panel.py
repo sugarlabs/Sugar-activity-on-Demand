@@ -3359,7 +3359,9 @@ class CreateAIActivityPanel(Gtk.EventBox):
     def _create_learning_sidebar(self):
         panel = Gtk.EventBox()
         panel.get_style_context().add_class('create-ai-learning-sidebar')
-        panel.set_size_request(style.zoom(260), -1)
+        # Small minimum so the pane can be dragged narrow and the
+        # wrapping content below reflows to fit rather than clipping.
+        panel.set_size_request(style.zoom(200), -1)
 
         box = Gtk.VBox(spacing=style.zoom(9))
         box.set_border_width(style.zoom(11))
@@ -3384,41 +3386,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
 
 
-        guided = Gtk.EventBox()
-        guided.get_style_context().add_class('create-ai-learning-card')
-        box.pack_start(guided, False, False, 0)
-        guided.show()
-
-        guided_box = Gtk.VBox(spacing=style.zoom(4))
-        guided_box.set_border_width(style.zoom(10))
-        guided.add(guided_box)
-        guided_box.show()
-
-        guided_header = Gtk.HBox(spacing=style.zoom(8))
-        guided_box.pack_start(guided_header, False, False, 0)
-        guided_header.show()
-
-        guided_title = Gtk.Label(_('Guided code exploration'))
-        guided_title.get_style_context().add_class(
-            'create-ai-studio-note-label')
-        guided_title.set_xalign(0)
-        guided_header.pack_start(guided_title, True, True, 0)
-        guided_title.show()
-
-        guided_counts = Gtk.Label(
-            _('Challenges 137   Reflections 8   Notes 11'))
-        guided_counts.get_style_context().add_class(
-            'create-ai-learning-counts')
-        guided_header.pack_end(guided_counts, False, False, 0)
-        guided_counts.show()
-
-        guided_subtitle = Gtk.Label(
-            _('Practice edits, reflection, and reading key lines.'))
-        guided_subtitle.get_style_context().add_class('create-ai-meta-note')
-        guided_subtitle.set_xalign(0)
-        guided_box.pack_start(guided_subtitle, False, False, 0)
-        guided_subtitle.show()
-
         tabs = Gtk.HBox(spacing=style.zoom(8))
         box.pack_start(tabs, False, False, 0)
         tabs.show()
@@ -3434,6 +3401,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._sidebar_level_label.get_style_context().add_class(
             'create-ai-meta-label')
         self._sidebar_level_label.set_xalign(0)
+        self._sidebar_level_label.set_line_wrap(True)
         box.pack_start(self._sidebar_level_label, False, False, 0)
         self._sidebar_level_label.show()
 
@@ -3457,9 +3425,9 @@ class CreateAIActivityPanel(Gtk.EventBox):
             _('Change one color and explain the choice.'),
             _('Export when the preview feels ready.'),
         ]
-        for text in challenges:
+        for index, text in enumerate(challenges):
             self._sidebar_challenge_box.pack_start(
-                self._create_challenge_card(text), False, False, 0)
+                self._create_challenge_card(text, index), False, False, 0)
 
         panel.show()
         return panel
@@ -3606,16 +3574,27 @@ class CreateAIActivityPanel(Gtk.EventBox):
                              adjustment.get_page_size())
         return False
 
-    def _create_challenge_card(self, text):
+    # Accent colours for the challenge cards (match the CSS left-border
+    # classes create-ai-challenge-c0..c5).
+    _CHALLENGE_ACCENTS = (
+        '#e0603a', '#e0a13a', '#5aa65a', '#3f9b8e', '#4a90d9', '#9b6ac0')
+
+    def _create_challenge_card(self, text, index=0):
+        accent = self._CHALLENGE_ACCENTS[index % len(self._CHALLENGE_ACCENTS)]
         card = Gtk.EventBox()
         card.get_style_context().add_class('create-ai-challenge-card')
+        card.get_style_context().add_class(
+            'create-ai-challenge-c%d' % (index % len(self._CHALLENGE_ACCENTS)))
 
         box = Gtk.VBox(spacing=style.zoom(6))
         box.set_border_width(style.zoom(10))
         card.add(box)
         box.show()
 
-        title = Gtk.Label(_('Level 1 - Cosmetic'))
+        title = Gtk.Label()
+        title.set_markup(
+            '<span weight="bold" foreground="%s">%s</span>' %
+            (accent, _('Level 1 - Cosmetic')))
         title.get_style_context().add_class('create-ai-meta-label')
         title.set_xalign(0)
         box.pack_start(title, False, False, 0)
@@ -3625,6 +3604,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         body.get_style_context().add_class('create-ai-studio-note-label')
         body.set_xalign(0)
         body.set_line_wrap(True)
+        body.set_max_width_chars(24)
         box.pack_start(body, False, False, 0)
         body.show()
 
@@ -7753,8 +7733,8 @@ if clipboard.wait_is_text_available():
 
         challenges = self._build_activity_challenges(result, plan)
 
-        for text in challenges:
-            card = self._create_challenge_card(text)
+        for index, text in enumerate(challenges):
+            card = self._create_challenge_card(text, index)
             self._sidebar_challenge_box.pack_start(card, False, False, 0)
             card.show_all()
 

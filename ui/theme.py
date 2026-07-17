@@ -1088,28 +1088,35 @@ _CSS_TEMPLATE = '''
                 border-color: %(studio_edge)s;
             }
             button.create-ai-sidebar-tab-active {
-                background-color: %(studio_lavender)s;
-                border-color: %(studio_lavender_border)s;
-                color: %(studio_lavender_text)s;
-                box-shadow: 0 2px 3px rgba(0, 0, 0, 0.09);
+                background-color: %(accent_violet)s;
+                border-color: %(accent_violet)s;
+                color: %(accent_text)s;
+                box-shadow: 0 2px 3px rgba(108, 86, 198, 0.28);
             }
             button.create-ai-sidebar-tab-active:hover {
-                background-color: %(studio_lavender)s;
-                border-color: %(studio_lavender_border)s;
-                color: %(studio_lavender_text)s;
+                background-color: %(accent_violet_hover)s;
+                border-color: %(accent_violet_hover)s;
+                color: %(accent_text)s;
             }
             button.create-ai-sidebar-tab-active label {
-                color: %(studio_lavender_text)s;
+                color: %(accent_text)s;
             }
             button.create-ai-sidebar-tab-active:hover label {
-                color: %(studio_lavender_text)s;
+                color: %(accent_text)s;
             }
             .create-ai-challenge-card {
                 border-radius: 10px;
                 border: 1px solid %(studio_edge_soft)s;
+                border-left-width: 4px;
                 background-color: %(studio_surface)s;
                 box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
             }
+            .create-ai-challenge-c0 { border-left-color: #e0603a; }
+            .create-ai-challenge-c1 { border-left-color: #e0a13a; }
+            .create-ai-challenge-c2 { border-left-color: #5aa65a; }
+            .create-ai-challenge-c3 { border-left-color: #3f9b8e; }
+            .create-ai-challenge-c4 { border-left-color: #4a90d9; }
+            .create-ai-challenge-c5 { border-left-color: #9b6ac0; }
         '''
 
 
