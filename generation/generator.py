@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from dataclasses import dataclass
+import ast
 import hashlib
 import json
 import os
 import re
-import time
 
 from sugar3.activity import bundlebuilder
 
@@ -197,7 +197,10 @@ def build_plan(spec):
         'bundle_id': bundle_id,
         'class_name': 'GeneratedActivity',
         'license': spec.license_id,
-        'activity_version': int(time.time()),
+        # A stable version that starts at 1 and is bumped only when the source
+        # actually changes (see refine_activity), so reopening an unchanged
+        # activity does not mint a new version the way a timestamp did.
+        'activity_version': 1,
     }
 
     if template == 'quiz':
@@ -576,6 +579,14 @@ def normalize_plan(spec, plan):
         if isinstance(attempts, int):
             normalized[field] = attempts
 
+    # Preserve an explicit semantic version so a plan carried across
+    # normalization (initial generation, refinement bump, reopen) keeps its
+    # version instead of resetting to the build_plan default of 1.
+    version = plan.get('activity_version')
+    if isinstance(version, int) and not isinstance(version, bool) and \
+            version > 0:
+        normalized['activity_version'] = version
+
     repair_history = plan.get('repair_history')
     if isinstance(repair_history, list):
         # Repair events contain only JSON-safe diagnostic data assembled by
@@ -609,6 +620,7 @@ def assemble_project(spec, plan, output_root, activity_source=None):
     project_path = _new_project_path(output_root, spec.name)
     activity_path = os.path.join(project_path, 'activity')
     os.makedirs(activity_path)
+    os.makedirs(os.path.join(project_path, 'po'))
 
     license_info = get_license(spec.license_id)
     # Only None means "use the local renderer".  An empty or otherwise
@@ -625,6 +637,8 @@ def assemble_project(spec, plan, output_root, activity_source=None):
         os.path.join('activity', 'activity.info'):
             _render_activity_info(spec, plan),
         os.path.join('activity', 'activity.svg'): _activity_icon(plan),
+        os.path.join('po', '%s.pot' % _identifier(spec.name)):
+            _render_pot(spec, plan, _extract_translatable_strings(source)),
     }
 
     for relative_path, content in files.items():
@@ -709,6 +723,48 @@ def apply_license_to_project(project_path, spec, plan):
     return read_project_files(project_path)
 
 
+# Two-student board activities seat a partner; everything else is single-user.
+_MULTI_PARTICIPANT_TEMPLATES = ('chess', 'carrom')
+
+# Sugar's discovery field is `tags`; map the internal learning area to a
+# reader-friendly tag so the Journal and home view surface the activity well.
+_CATEGORY_TAGS = {
+    'logic_math': 'Math',
+    'science': 'Science',
+    'language': 'Language',
+    'games': 'Games',
+    'creation': 'Art',
+    'tools_utils': 'Tools',
+}
+
+
+def _max_participants(plan):
+    if plan.get('template') in _MULTI_PARTICIPANT_TEMPLATES:
+        return 2
+    model = str(plan.get('interaction_model') or '').lower()
+    if any(word in model for word in ('two', 'partner', 'multiplayer',
+                                      'multi-player', 'multi player')):
+        return 2
+    return 1
+
+
+def _activity_tags(spec, plan):
+    """Build the Sugar `tags` discovery line from area + word bank."""
+    tags = ['Education']
+    label = _CATEGORY_TAGS.get(getattr(spec, 'category', ''))
+    if label and label not in tags:
+        tags.append(label)
+    for word in plan.get('word_bank') or ():
+        token = str(word).strip()
+        if token.isalpha() and len(token) > 2:
+            tag = token.capitalize()
+            if tag not in tags:
+                tags.append(tag)
+        if len(tags) >= 6:
+            break
+    return ' '.join(tags)
+
+
 def _render_activity_info(spec, plan):
     return (
         '[Activity]\n'
@@ -718,16 +774,81 @@ def _render_activity_info(spec, plan):
         'exec = sugar-activity3 activity.GeneratedActivity\n'
         'activity_version = %(activity_version)s\n'
         'license = %(license)s\n'
-        'max_participants = 1\n'
+        'max_participants = %(max_participants)d\n'
         'summary = %(summary)s\n'
-        'tags = Education\n'
+        'tags = %(tags)s\n'
     ) % {
         'name': spec.name.replace('\n', ' '),
         'bundle_id': plan['bundle_id'],
         'license': spec.license_id,
         'summary': plan['summary'].replace('\n', ' '),
         'activity_version': plan['activity_version'],
+        'max_participants': _max_participants(plan),
+        'tags': _activity_tags(spec, plan),
     }
+
+
+def _extract_translatable_strings(source):
+    """Return ordered, de-duplicated strings wrapped in _() in the source.
+
+    The generated activity uses ``from gettext import gettext as _`` (see the
+    codegen prompt), so every user-facing string is an ``_("...")`` call.  This
+    harvests them for the translation template; unparseable source yields an
+    empty (still valid) template.
+    """
+    strings = []
+    seen = set()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return strings
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Name) and node.func.id == '_'):
+            continue
+        if not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            value = first.value
+            if value.strip() and value not in seen:
+                seen.add(value)
+                strings.append(value)
+    return strings
+
+
+def _po_escape(text):
+    return (
+        text.replace('\\', '\\\\')
+            .replace('"', '\\"')
+            .replace('\n', '\\n')
+            .replace('\t', '\\t')
+    )
+
+
+def _render_pot(spec, plan, strings):
+    """Render a gettext .pot translation template for the activity."""
+    name = spec.name.replace('\n', ' ')
+    header = (
+        '# Translation template for %(name)s.\n'
+        '# Copyright (C) 2026 Sugar Labs\n'
+        '# This file is distributed under the same license as the '
+        'activity.\n'
+        '#\n'
+        'msgid ""\n'
+        'msgstr ""\n'
+        '"Project-Id-Version: %(name)s %(version)s\\n"\n'
+        '"Report-Msgid-Bugs-To: \\n"\n'
+        '"MIME-Version: 1.0\\n"\n'
+        '"Content-Type: text/plain; charset=UTF-8\\n"\n'
+        '"Content-Transfer-Encoding: 8bit\\n"\n'
+    ) % {'name': name, 'version': plan.get('activity_version', 1)}
+    entries = ''.join(
+        '\nmsgid "%s"\nmsgstr ""\n' % _po_escape(text)
+        for text in strings
+    )
+    return header + entries
 
 
 def _render_readme(spec, plan):

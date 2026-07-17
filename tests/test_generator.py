@@ -219,3 +219,71 @@ class TestAodGenerator(unittest.TestCase):
                   encoding='utf-8') as license_file:
             self.assertIn('BSD 3-Clause License', license_file.read())
         self.assertTrue(validate_project(result.project_path).valid)
+
+
+class TestActivityInfoMetadata(unittest.TestCase):
+
+    def setUp(self):
+        self.output_root = tempfile.mkdtemp(prefix='aod-info-test-')
+
+    def tearDown(self):
+        shutil.rmtree(self.output_root)
+
+    def _info(self, spec):
+        result = create_prototype_activity(spec, self.output_root)
+        return result.files['activity/activity.info']
+
+    def test_version_is_stable_semantic_not_timestamp(self):
+        info = self._info(ActivitySpec(
+            'Version Demo', 'Make a counting activity.', 'logic_math', 'MIT'))
+        self.assertIn('activity_version = 1\n', info)
+
+    def test_two_student_board_seats_two_participants(self):
+        info = self._info(ActivitySpec(
+            'Chess Club', 'Create a chess board for two students.',
+            'games', 'MIT'))
+        self.assertIn('max_participants = 2\n', info)
+
+    def test_single_user_activity_seats_one(self):
+        info = self._info(ActivitySpec(
+            'Quiz Time', 'Make a multiplication quiz.', 'logic_math', 'MIT'))
+        self.assertIn('max_participants = 1\n', info)
+
+    def test_tags_include_area_and_word_bank(self):
+        info = self._info(ActivitySpec(
+            'Chess Club', 'Create a chess board for two students.',
+            'games', 'MIT'))
+        tags_line = [
+            line for line in info.splitlines() if line.startswith('tags =')
+        ][0]
+        self.assertIn('Education', tags_line)
+        self.assertIn('Games', tags_line)
+
+    def test_normalize_preserves_explicit_version(self):
+        from generation.generator import build_plan
+        from generation.generator import normalize_plan
+        spec = ActivitySpec('Keep Ver', 'Make a quiz.', 'logic_math', 'MIT')
+        base = build_plan(spec)
+        self.assertEqual(1, base['activity_version'])
+        bumped = dict(base)
+        bumped['activity_version'] = 7
+        self.assertEqual(7, normalize_plan(spec, bumped)['activity_version'])
+
+    def test_project_includes_valid_translation_template(self):
+        spec = ActivitySpec('Po Demo', 'Make a quiz.', 'logic_math', 'MIT')
+        result = create_prototype_activity(spec, self.output_root)
+        pot_path = os.path.join(result.project_path, 'po', 'PoDemo.pot')
+        self.assertTrue(os.path.isfile(pot_path))
+        with open(pot_path, encoding='utf-8') as pot_file:
+            content = pot_file.read()
+        self.assertIn('msgid ""', content)
+        self.assertIn('Content-Type: text/plain; charset=UTF-8', content)
+        # Packaging still succeeds with the po/ directory present.
+        self.assertTrue(os.path.isfile(result.bundle_path))
+
+    def test_extract_translatable_strings_dedupes_in_order(self):
+        from generation.generator import _extract_translatable_strings
+        source = 'a = _("Hello")\nb = _("World")\nc = _("Hello")\nd = 1\n'
+        self.assertEqual(
+            ['Hello', 'World'], _extract_translatable_strings(source))
+        self.assertEqual([], _extract_translatable_strings('def broken('))
