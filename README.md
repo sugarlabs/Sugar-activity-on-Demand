@@ -35,7 +35,7 @@ Example:
 
 > “A fraction matching game with levels and instant feedback.”
 
-The studio runs on any Linux desktop and does **not** require the Sugar shell to be installed or running.
+The studio runs on any Linux desktop and does **not** require the Sugar shell to be installed or running. When Sugar *is* installed, the studio is itself a Sugar activity, so it can be launched from the activity ring like any other activity — see [Run from the Sugar activity ring](#run-from-the-sugar-activity-ring).
 
 <p align="center">
   <sub><strong>idea</strong> → enhance → plan → generate → validate → run → preview → refine → export</sub>
@@ -201,10 +201,11 @@ Export the activity as an `.xo` bundle, export Flatpak sources, or install it di
 
 ## Where things live
 
-| Path                    | Contents                                              |
-| ----------------------- | ----------------------------------------------------- |
-| `~/.sugar/default/aod/` | Projects, sessions, jobs, and locally stored API keys |
-| `~/Activities/`         | Installed Sugar activities                            |
+| Path                                          | Contents                                                        |
+| --------------------------------------------- | --------------------------------------------------------------- |
+| `~/.sugar/default/aod/`                       | Projects, sessions, jobs, and locally stored API keys           |
+| `~/Activities/`                               | Installed Sugar activities you generate                         |
+| `~/Activities/SugarActivityStudio.activity`   | The studio itself, once registered in the ring (`./install.sh --ring`) — a symlink back to this checkout |
 
 The `~/.sugar/default/aod/` directory is shared with a Sugar shell install when one is available.
 
@@ -235,6 +236,9 @@ The codebase is organized by domain:
 | `exports/`    | Flatpak and export logic                                   |
 | `preview/`    | Activity preview runtime                                   |
 | `ui/`         | GTK interface                                              |
+| `activity.py`, `activity/`, `setup.py` | Sugar activity bundle: the `StudioActivity` entry class, `activity.info`, icon, and the bundlebuilder script |
+
+The studio has two entry points that share the same `CreateAIActivityPanel` UI: `main.py` (standalone desktop window, via `bin/sugar-aod-studio`) and `activity.py` (`StudioActivity`, launched by `sugar-activity3` from the ring). Both depend only on the Sugar *toolkit* — never the shell (`jarabe`); `tests/test_studio.py` and `tests/test_activity_bundle.py` enforce that.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture map.
 
