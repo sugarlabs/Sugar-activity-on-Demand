@@ -232,6 +232,16 @@ _CSS_TEMPLATE = '''
                 font-weight: 700;
                 font-size: 17px;
             }
+            .create-ai-error-preview {
+                background-color: #fff7e6;
+                border: 1px solid #e6b800;
+                border-radius: 14px;
+            }
+            .create-ai-error-generation {
+                background-color: #fdecea;
+                border: 1px solid #d93025;
+                border-radius: 14px;
+            }
             .create-ai-generated-badge {
                 border-radius: 999px;
                 border: 1px solid %(studio_edge)s;

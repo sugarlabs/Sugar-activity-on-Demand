@@ -197,6 +197,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._selected_version = 'v6'
         self._version_mode = 'diff'
         self._review_draft_was_shown = False
+        self._repair_events_shown = 0
+        self._resume_repair_job_id = None
         self._live_edit_entry = None
         self._live_edit_status_label = None
         self._live_edit_target_label = None
@@ -5239,6 +5241,9 @@ if clipboard.wait_is_text_available():
         error_box.set_halign(Gtk.Align.CENTER)
         error_box.set_valign(Gtk.Align.CENTER)
         error_box.set_border_width(style.zoom(30))
+        # Amber, recoverable framing: the code exists and can be reviewed or
+        # refined, unlike a hard generation failure (which produced nothing).
+        error_box.get_style_context().add_class('create-ai-error-preview')
 
         error_icon = Gtk.Label('⚠')
         error_icon.set_markup(
@@ -7371,6 +7376,7 @@ if clipboard.wait_is_text_available():
             'repair_diagnostics': {},
         }
         self._review_draft_was_shown = False
+        self._repair_events_shown = 0
         self._set_review_file(self._current_review_file)
         self._use_studio_layout()
         self._select_studio_tab('preview')
@@ -7489,20 +7495,72 @@ if clipboard.wait_is_text_available():
             self._append_chat_message(
                 _('I understood your idea as:\n%s') % enhanced,
                 from_user=False)
+        self._announce_repair_events(job)
         self._update_live_review_generation(stage, fraction, message, job)
         self._update_provider_call_status(stage, fraction, message)
         self._update_generation_animation(stage, fraction, message)
         if self._preview_empty_title is not None:
             if self._preview_empty_title.get_text() != _('Building your activity'):
                 self._preview_empty_title.set_text(_('Building your activity'))
-        if self._preview_empty_note is not None:
-            self._preview_empty_note.set_text(
-                _('%(stage)s - %(percent)d%%') % {
-                    'stage': message,
-                    'percent': int(fraction * 100),
-                }
-            )
+        # The note stays a calm static subtitle; the live step + percent
+        # is shown once, on the animated status line (no duplicate).
         return False
+
+    def _announce_repair_events(self, job):
+        """Surface the debugging loop in the chat as new events arrive.
+
+        The service appends each repair attempt to job.repair_history; show one
+        concise human line per new event so the learner sees the code being
+        fixed instead of a silent pause.
+        """
+        if job is None:
+            return
+        history = getattr(job, 'repair_history', ()) or ()
+        while self._repair_events_shown < len(history):
+            event = history[self._repair_events_shown]
+            self._repair_events_shown += 1
+            line = self._repair_event_chat_line(event)
+            if line:
+                self._append_chat_status(line)
+
+    @staticmethod
+    def _verification_badge_line(plan):
+        """A trust badge describing whether the code was actually run."""
+        if plan.get('code_source') != 'provider':
+            return ''
+        status = str(plan.get('verification_status') or '')
+        if status == 'passed':
+            return _('✅ Run-tested: the activity started and completed a '
+                     'Journal save and restore.')
+        if status == 'runtime_unverified':
+            return _('⚠ Not run-tested here (no display available); static '
+                     'checks passed but execution is unverified.')
+        if status in ('runtime_check', 'static_validation'):
+            return _('⚠ This activity did not pass runtime testing; review '
+                     'the code before classroom use.')
+        return ''
+
+    @staticmethod
+    def _repair_event_chat_line(event):
+        if not isinstance(event, dict):
+            return ''
+        outcome = event.get('outcome', '')
+        attempt = event.get('attempt', 0) or 0
+        if outcome in ('passed', 'critic_patch_passed',
+                       'refinement_patch_passed'):
+            return _('🔧 Fixed a problem in the code — it now passes every '
+                     'check.')
+        if outcome in ('initial_candidate_rejected',
+                       'refinement_patch_rejected'):
+            return _('⚠ The generated code had a problem — repairing it in '
+                     'place...')
+        if outcome == 'intermediate_committed':
+            return _('🔧 Repair attempt %d made progress; checking again...') \
+                % attempt
+        if attempt > 0:
+            return _('🔧 Repair attempt %d did not hold; trying a different '
+                     'fix...') % attempt
+        return ''
 
     def _update_live_review_generation(self, stage, fraction, message,
                                        job=None):
@@ -7627,6 +7685,9 @@ if clipboard.wait_is_text_available():
         self._refresh_version_history()
         if announce:
             self._append_chat_status(provider_status)
+            badge = self._verification_badge_line(plan)
+            if badge:
+                self._append_chat_status(badge)
             chat_msgs = self._build_generation_chat_messages(result, plan)
             for i, msg in enumerate(chat_msgs):
                 self._append_chat_message(
@@ -7860,57 +7921,243 @@ if clipboard.wait_is_text_available():
         if self._sidebar_refine_status_label is not None:
             self._sidebar_refine_status_label.set_text(
                 _('Generation failed. Try a smaller refinement.'))
-        if self._preview_empty_title is not None:
-            self._preview_empty_title.set_text(
-                _('Could not generate activity'))
-        if self._preview_empty_note is not None:
-            self._preview_empty_note.set_text(display_error)
+        if draft_source and job is not None:
+            self._render_generation_failed_preview(job.job_id, display_error)
+        else:
+            if self._preview_empty_title is not None:
+                self._preview_empty_title.set_text(
+                    _('Could not generate activity'))
+            if self._preview_empty_note is not None:
+                self._preview_empty_note.set_text(display_error)
         self._append_chat_status(
             _('Generation failed: %s') % display_error)
         self._append_sidebar_message(
             _('Generation failed: %s') % display_error)
         self._set_chat_entry_sensitive(True)
         self._set_review_file(self._current_review_file)
-        if draft_source:
-            self._select_studio_tab('review')
         return False
+
+    def _render_generation_failed_preview(self, job_id, error_text):
+        """Show a clear failure panel with a Continue-repairing action.
+
+        Red framing marks a hard failure (unlike the amber preview-render
+        warning), and the saved draft can be repaired again without
+        re-generating the file.
+        """
+        self._clear_activity_preview()
+        box = Gtk.VBox(spacing=style.zoom(12))
+        box.set_halign(Gtk.Align.CENTER)
+        box.set_valign(Gtk.Align.CENTER)
+        box.set_border_width(style.zoom(30))
+        box.get_style_context().add_class('create-ai-error-generation')
+
+        icon = Gtk.Label()
+        icon.set_markup('<span size="xx-large">⛔</span>')
+        box.pack_start(icon, False, False, 0)
+
+        title = Gtk.Label(_('Could not finish this activity'))
+        title.get_style_context().add_class('create-ai-generated-title')
+        box.pack_start(title, False, False, 0)
+
+        note = Gtk.Label(
+            _('The model wrote a draft but it did not pass every check. '
+              'Keep repairing the same draft, or open the Review tab to '
+              'read the code.'))
+        note.get_style_context().add_class('create-ai-meta-note')
+        note.set_line_wrap(True)
+        note.set_max_width_chars(60)
+        note.set_justify(Gtk.Justification.CENTER)
+        box.pack_start(note, False, False, 0)
+
+        detail = Gtk.Label(str(error_text)[:220])
+        detail.get_style_context().add_class('create-ai-generation-stage')
+        detail.set_line_wrap(True)
+        detail.set_max_width_chars(70)
+        detail.set_justify(Gtk.Justification.CENTER)
+        box.pack_start(detail, False, False, 0)
+
+        actions = Gtk.HBox(spacing=style.zoom(8))
+        actions.set_halign(Gtk.Align.CENTER)
+        resume = Gtk.Button.new_with_label(_('Continue repairing'))
+        resume.get_style_context().add_class('create-ai-studio-primary')
+        resume.connect('clicked', lambda *_a: self._resume_repair(job_id))
+        actions.pack_start(resume, False, False, 0)
+        review = Gtk.Button.new_with_label(_('View draft code'))
+        review.set_relief(Gtk.ReliefStyle.NONE)
+        review.connect(
+            'clicked', lambda *_a: self._select_studio_tab('review'))
+        actions.pack_start(review, False, False, 0)
+        box.pack_start(actions, False, False, 0)
+
+        self._preview_content_box.pack_start(box, True, True, 0)
+        box.show_all()
+
+    def _resume_repair(self, failed_job_id):
+        """Continue the repair loop from a preserved failed draft."""
+        from service.service import get_service
+
+        service = get_service()
+        self._detach_generation_job()
+        self._repair_events_shown = 0
+        self._enhanced_prompt_announced = True
+        self._review_generation_context = {
+            'is_refinement': False,
+            'provider': self._get_provider_label(
+                self._selected_options.get('provider', 'default')),
+            'prompt': _('Continue repairing the previous draft'),
+            'stage': 'generating',
+            'progress': 0.3,
+            'message': _('Continuing repair...'),
+            'draft_activity_source': '',
+            'repair_history': [],
+            'repair_diagnostics': {},
+        }
+        self._review_draft_was_shown = False
+        self._use_studio_layout()
+        self._select_studio_tab('preview')
+        self._stack.set_visible_child_name('studio')
+        self._start_generation_animation(
+            _('Continuing repair on the saved draft...'))
+        if self._prompt_status_label is not None:
+            self._prompt_status_label.set_text(_('Repairing'))
+        self._append_chat_status(
+            _('🔧 Continuing repair on the saved draft...'))
+
+        try:
+            job = service.resume_repair(failed_job_id)
+        except Exception as error:
+            logging.exception('Could not resume repair')
+            self._generation_failed_cb(str(error))
+            return
+        if job is None:
+            self._generation_failed_cb(
+                _('There is no saved draft to continue repairing.'))
+            return
+
+        self._generation_job_id = job.job_id
+        self._aod_session_id = job.session_id
+        self._set_chat_entry_sensitive(False)
+        service.watch(job.job_id, self._generation_job_callback)
+        self._generation_job_updated_from_worker(job)
 
     def __review_and_install_cb(self, button):
         self._select_studio_tab('review')
 
+    # Default width for the right learning sidebar when opened.
+    _SIDEBAR_DEFAULT_WIDTH = 500
+
+    def __inner_paned_size_allocate_cb(self, paned, alloc):
+        if self._inner_paned_initialised or alloc.width <= 1:
+            return
+        self._inner_paned_initialised = True
+        paned.set_position(alloc.width - style.zoom(self._SIDEBAR_DEFAULT_WIDTH))
+
+    def _sidebar_open_position(self):
+        # Where the preview | sidebar divider sits when the sidebar is
+        # open: a remembered drag, or the default width from the right.
+        if self._sidebar_saved_pos is not None:
+            return self._sidebar_saved_pos
+        width = self._inner_paned.get_allocated_width()
+        return max(0, width - style.zoom(self._SIDEBAR_DEFAULT_WIDTH))
+
+    def _animate_paned(self, paned, target, done=None):
+        if paned is None:
+            return
+        start = paned.get_position()
+        target = int(target)
+        # Cancel any in-flight tween on this paned before starting a new
+        # one, so overlapping toggles don't fight each other.
+        old = self._paned_anim_ids.pop(id(paned), None)
+        if old is not None:
+            try:
+                paned.remove_tick_callback(old)
+            except Exception:
+                pass
+        if start == target:
+            paned.set_position(target)
+            if done is not None:
+                done()
+            return
+        # Frame-clock driven, time-based tween: vsync-synced updates and
+        # an ease-out cubic give a soft, smooth glide independent of the
+        # timer jitter a fixed-step tween would suffer.
+        duration = 340000.0  # microseconds
+        state = {'start': None}
+
+        def tick(widget, frame_clock):
+            now = frame_clock.get_frame_time()
+            if state['start'] is None:
+                state['start'] = now
+            progress = min(1.0, (now - state['start']) / duration)
+            eased = 1.0 - (1.0 - progress) ** 3
+            widget.set_position(int(start + (target - start) * eased))
+            if progress >= 1.0:
+                self._paned_anim_ids.pop(id(paned), None)
+                if done is not None:
+                    done()
+                return GLib.SOURCE_REMOVE
+            return GLib.SOURCE_CONTINUE
+
+        self._paned_anim_ids[id(paned)] = paned.add_tick_callback(tick)
+
+    def _set_pane_shrink(self, paned, child, shrink):
+        if paned is None or child is None:
+            return
+        try:
+            paned.child_set_property(child, 'shrink', shrink)
+        except Exception:
+            pass
+
+    def _collapse_pane(self, paned, child, target):
+        # Let this pane close past its content minimum for the slide,
+        # then leave it tucked away. Manual drags keep shrink=False so
+        # the content is never clipped.
+        self._set_pane_shrink(paned, child, True)
+        self._animate_paned(paned, target)
+
+    def _expand_pane(self, paned, child, target):
+        def done():
+            self._set_pane_shrink(paned, child, False)
+            self._refresh_preview_layout()
+        self._animate_paned(paned, target, done)
+
     def __preview_fullscreen_toggle_cb(self, button):
         self._preview_is_fullscreen = not self._preview_is_fullscreen
         if self._preview_is_fullscreen:
-            if self._studio_left_panel is not None:
-                self._studio_left_panel.hide()
-            if self._sidebar_revealer is not None:
-                self._sidebar_revealer.set_transition_duration(0)
-                self._sidebar_revealer.set_reveal_child(False)
-                self._sidebar_revealer.set_transition_duration(260)
+            # Slide the left chat away and tuck the right sidebar in.
+            if self._body_paned is not None:
+                self._left_saved_pos = self._body_paned.get_position()
+                self._collapse_pane(self._body_paned,
+                                    self._studio_left_panel, 0)
+            if self._inner_paned is not None:
+                if self._sidebar_visible:
+                    self._sidebar_saved_pos = self._inner_paned.get_position()
+                self._collapse_pane(
+                    self._inner_paned, self._studio_right_panel,
+                    self._inner_paned.get_allocated_width())
             if self._preview_fullscreen_button is not None:
                 self._preview_fullscreen_button.set_label(
                     _('⛶ Exit Fullscreen'))
-            if self._live_edit_panel is not None:
-                self._live_edit_panel.hide()
             if self._ask_bar is not None:
                 self._ask_bar.show()
                 if self._ask_bar_entry is not None:
                     self._ask_bar_entry.grab_focus()
         else:
-            if self._studio_left_panel is not None:
-                self._studio_left_panel.show()
-            if self._sidebar_revealer is not None:
-                self._sidebar_revealer.set_transition_duration(0)
-                self._sidebar_revealer.set_reveal_child(
-                    self._sidebar_visible)
-                self._sidebar_revealer.set_transition_duration(260)
+            if self._body_paned is not None:
+                self._expand_pane(
+                    self._body_paned, self._studio_left_panel,
+                    self._left_saved_pos
+                    if self._left_saved_pos is not None
+                    else style.zoom(455))
+            if self._inner_paned is not None and self._sidebar_visible:
+                self._expand_pane(
+                    self._inner_paned, self._studio_right_panel,
+                    self._sidebar_open_position())
             if self._preview_fullscreen_button is not None:
                 self._preview_fullscreen_button.set_label(
                     _('⛶ Fullscreen'))
             if self._ask_bar is not None:
                 self._ask_bar.hide()
-            if self._live_edit_panel is not None:
-                self._live_edit_panel.show()
             self._refresh_preview_layout()
 
     def __sidebar_toggle_cb(self, button):
