@@ -533,22 +533,47 @@ _CSS_TEMPLATE = '''
                 border: 1px solid %(studio_edge)s;
                 background-color: %(studio_canvas)s;
             }
+            .create-ai-toolbar {
+                padding: 10px 14px;
+                border-radius: 12px;
+                background-color: #000000;
+            }
+            .create-ai-area-badge {
+                border-radius: 999px;
+            }
+            .create-ai-area-logic_math { background-color: #f6cbc8; }
+            .create-ai-area-science    { background-color: #bfe2db; }
+            .create-ai-area-language   { background-color: #cee0f6; }
+            .create-ai-area-tools_utils{ background-color: #e4d5f0; }
+            .create-ai-area-games      { background-color: #cfe8cf; }
+            .create-ai-area-creation   { background-color: #f6e6c6; }
             .create-ai-studio-side {
                 border-radius: 12px;
                 border: 1px solid %(studio_edge)s;
                 background-color: %(studio_surface)s;
                 box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
             }
+            paned > separator {
+                min-width: 10px;
+                background-color: transparent;
+                background-image: none;
+                border: none;
+            }
+            paned > separator:hover {
+                background-image: none;
+                background-color: rgba(120, 120, 120, 0.10);
+                border-radius: 6px;
+            }
             .create-ai-studio-chip {
                 border-radius: 12px;
-                border: 1px solid %(studio_lavender_border)s;
-                background-color: %(studio_lavender)s;
-                color: %(studio_lavender_text)s;
+                border: 1px solid %(teal_border)s;
+                background-color: %(teal_soft)s;
+                color: %(teal_text)s;
                 padding: 8px 16px;
                 font-weight: 700;
             }
             .create-ai-studio-chip label {
-                color: %(studio_lavender_text)s;
+                color: %(teal_text)s;
             }
             .create-ai-studio-note {
                 border-radius: 10px;

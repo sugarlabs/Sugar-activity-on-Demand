@@ -328,6 +328,39 @@ class CreateAIActivityPanel(Gtk.EventBox):
         content = Gtk.VBox(spacing=style.zoom(14))
         content.set_size_request(style.zoom(1280), -1)
 
+        # A proper top toolbar: app identity on the left, primary
+        # actions on the right, with a soft divider under it.
+        toolbar = Gtk.HBox(spacing=style.zoom(10))
+        toolbar.get_style_context().add_class('create-ai-toolbar')
+        content.pack_start(toolbar, False, False, 0)
+        toolbar.show()
+
+        brand = Gtk.HBox(spacing=style.zoom(9))
+        brand.set_valign(Gtk.Align.CENTER)
+        try:
+            brand_icon = Icon(icon_name='computer-xo',
+                              pixel_size=style.zoom(28),
+                              stroke_color='#ffffff',
+                              fill_color='#ffffff')
+            brand.pack_start(brand_icon, False, False, 0)
+            brand_icon.show()
+        except Exception:
+            logging.exception('Could not create toolbar XO icon')
+        brand_label = Gtk.Label()
+        brand_label.set_markup(
+            '<span size="large" weight="bold" foreground="#ffffff">%s</span>' %
+            _('Sugar Activity Studio'))
+        brand_label.set_halign(Gtk.Align.START)
+        brand.pack_start(brand_label, False, False, 0)
+        brand_label.show()
+        toolbar.pack_start(brand, False, False, 0)
+        brand.show()
+
+        toolbar.pack_end(self._create_primary_button(
+            _('Create new'), self.__home_create_new_cb), False, False, 0)
+        toolbar.pack_end(self._create_plain_button(
+            _('↻ Refresh'), self.__home_refresh_cb), False, False, 0)
+
         header = Gtk.HBox(spacing=style.zoom(12))
         content.pack_start(header, False, False, 0)
         header.show()
@@ -352,9 +385,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
         subtitle.set_line_wrap(True)
         titles.pack_start(subtitle, False, False, 0)
         subtitle.show()
-
-        header.pack_end(self._create_primary_button(
-            _('Create new'), self.__home_create_new_cb), False, False, 0)
 
         status = Gtk.Label('')
         self._home_status_label = status
@@ -8715,6 +8745,9 @@ if clipboard.wait_is_text_available():
         self._go_home()
 
     def __home_mapped_cb(self, widget):
+        self._refresh_home_projects()
+
+    def __home_refresh_cb(self, button):
         self._refresh_home_projects()
 
     def __home_icon_release_cb(self, icon, event, project):
