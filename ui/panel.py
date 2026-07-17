@@ -662,7 +662,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         bottom_row.pack_end(enhance_btn, False, False, style.zoom(6))
         enhance_btn.show()
 
-        thinking = Gtk.Label('')
+        thinking = Gtk.Label(_('Ready'))
         self._prompt_status_label = thinking
         thinking.get_style_context().add_class('create-ai-prompt-status')
         thinking.set_valign(Gtk.Align.CENTER)
@@ -1063,7 +1063,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             model_button.show()
         model_switch_row.hide()
 
-        status = Gtk.Label()
+        status = Gtk.Label(_('Ready'))
         self._provider_status_label = status
         status.get_style_context().add_class('create-ai-provider-status')
         status.set_xalign(0)
@@ -1503,8 +1503,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
         modes = Gtk.HBox(spacing=style.zoom(6))
         panel.pack_start(modes, False, False, 0)
         modes.show()
-        for label in [_('Make'), _('Play'), _('Share')]:
-            modes.pack_start(self._create_soft_pill(label), False, False, 0)
+        for label, tab_name in ((_('Make'), 'review'), (_('Play'), 'preview'),
+                                (_('Share'), 'versions')):
+            modes.pack_start(
+                self._create_action_pill(label, tab_name), False, False, 0)
 
         self._studio_mode_stack = Gtk.Stack()
         self._studio_mode_stack.set_transition_type(
@@ -1634,7 +1636,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._preview_content_box.pack_start(title, False, False, 0)
         title.show()
 
-        note = Gtk.Label(_('Backend output will render here.'))
+        note = Gtk.Label(_('Your activity preview will appear here. '
+                           'Describe an idea and press Generate to begin.'))
         self._preview_empty_note = note
         note.get_style_context().add_class('create-ai-meta-note')
         note.set_justify(Gtk.Justification.CENTER)
@@ -3573,6 +3576,16 @@ class CreateAIActivityPanel(Gtk.EventBox):
     def _create_soft_pill(self, label):
         pill = Gtk.Label(label)
         pill.get_style_context().add_class('create-ai-soft-pill')
+        pill.show()
+        return pill
+
+    def _create_action_pill(self, label, tab_name):
+        """A soft pill that navigates to a studio tab when clicked."""
+        pill = Gtk.Button.new_with_label(label)
+        pill.set_relief(Gtk.ReliefStyle.NONE)
+        pill.get_style_context().add_class('create-ai-soft-pill')
+        pill.connect(
+            'clicked', lambda *_a: self._select_studio_tab(tab_name))
         pill.show()
         return pill
 
