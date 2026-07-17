@@ -254,8 +254,24 @@ def flatpak_builder_available():
     return shutil.which('flatpak-builder') is not None
 
 
+def _short_process_error(error):
+    """Return the most informative one-line reason from a failed run."""
+    stderr = getattr(error, 'stderr', None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode('utf-8', 'replace')
+    if isinstance(stderr, str):
+        tail = [line for line in stderr.splitlines() if line.strip()]
+        if tail:
+            return tail[-1].strip()[:300]
+    return str(error)[:300]
+
+
 def _build_flatpak_bundle(staging_dir, flatpak_root, app_id, stem):
-    """Best-effort ``flatpak-builder`` run; returns .flatpak path or None."""
+    """Best-effort ``flatpak-builder`` run.
+
+    Returns ``(path, reason)``: on success ``(path, '')``; on failure
+    ``(None, reason)`` where ``reason`` explains why only sources were kept.
+    """
     manifest = '%s.json' % app_id
     repo_dir = os.path.join(flatpak_root, 'repo')
     build_dir = os.path.join(flatpak_root, 'build-dir')
@@ -269,12 +285,13 @@ def _build_flatpak_bundle(staging_dir, flatpak_root, app_id, stem):
             ['flatpak', 'build-bundle', repo_dir, output_path, app_id],
             check=True, capture_output=True, timeout=300)
     except (OSError, subprocess.SubprocessError) as error:
+        detail = _short_process_error(error)
         logging.warning('flatpak-builder build failed, exporting sources '
-                        'only: %s', error)
-        return None
+                        'only: %s', detail)
+        return None, 'flatpak-builder could not build the bundle: %s' % detail
     if os.path.isfile(output_path):
-        return output_path
-    return None
+        return output_path, ''
+    return None, 'flatpak-builder finished but produced no .flatpak file.'
 
 
 def package_flatpak(result):
@@ -284,7 +301,8 @@ def package_flatpak(result):
     ``flatpak-builder`` is available it also tries to build an installable
     ``.flatpak``. Returns a dict with ``kind`` (``'flatpak'`` or ``'source'``),
     ``path`` (the artifact to hand to the user), ``source_path`` (the tarball),
-    and ``app_id``.
+    ``app_id``, ``builder_available``, and ``reason`` (empty when an
+    installable ``.flatpak`` was built, else why only sources were exported).
     """
     plan = result.plan
     app_id = flatpak_app_id(plan)
@@ -308,12 +326,22 @@ def package_flatpak(result):
         'source_path': tarball_path,
         'app_id': app_id,
         'builder_available': builder_available,
+        'reason': '',
     }
 
-    if builder_available:
-        built = _build_flatpak_bundle(staging_dir, flatpak_root, app_id, stem)
-        if built:
-            export['kind'] = 'flatpak'
-            export['path'] = built
+    if not builder_available:
+        export['reason'] = (
+            'flatpak-builder is not installed, so only buildable Flatpak '
+            'sources were exported. Install flatpak-builder to produce an '
+            'installable .flatpak.')
+        return export
+
+    built, reason = _build_flatpak_bundle(
+        staging_dir, flatpak_root, app_id, stem)
+    if built:
+        export['kind'] = 'flatpak'
+        export['path'] = built
+    else:
+        export['reason'] = reason
 
     return export

@@ -123,6 +123,33 @@ class TestAodFlatpak(unittest.TestCase):
         self.assertIn('builder_available', export)
         self.assertIsInstance(export['builder_available'], bool)
 
+    def test_export_always_includes_a_reason_field(self):
+        result = self._make_result()
+        export = package_flatpak(result)
+        self.assertIn('reason', export)
+        self.assertIsInstance(export['reason'], str)
+        # A source-only export must explain why; a built .flatpak need not.
+        if export['kind'] == 'source':
+            self.assertTrue(export['reason'])
+
+    def test_build_failure_surfaces_reason_and_keeps_sources(self):
+        import exports.flatpak as flatpak_module
+        result = self._make_result()
+        original_available = flatpak_module.flatpak_builder_available
+        original_build = flatpak_module._build_flatpak_bundle
+        flatpak_module.flatpak_builder_available = lambda: True
+        flatpak_module._build_flatpak_bundle = (
+            lambda *args: (None, 'flatpak-builder could not build the '
+                                 'bundle: manifest error'))
+        try:
+            export = package_flatpak(result)
+        finally:
+            flatpak_module.flatpak_builder_available = original_available
+            flatpak_module._build_flatpak_bundle = original_build
+        self.assertEqual('source', export['kind'])
+        self.assertIn('manifest error', export['reason'])
+        self.assertTrue(os.path.isfile(export['source_path']))
+
     def test_package_flatpak_does_not_pollute_xo_project(self):
         result = self._make_result()
         package_flatpak(result)
