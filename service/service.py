@@ -101,6 +101,54 @@ class AODService:
         self._queue.submit(job)
         return job
 
+    def resume_repair(self, failed_job_id, callback=None):
+        """Continue repairing the preserved draft of a failed job.
+
+        Seeds a fresh job from the failed job's draft, diagnostics, and plan
+        and runs it through the repair-only path.  Returns the new job, or
+        ``None`` when there is no draft to continue from.
+        """
+        source_job = self.get_job(failed_job_id)
+        if source_job is None:
+            source_job = self._store.load(failed_job_id)
+        if source_job is None or not source_job.draft_activity_source:
+            return None
+
+        job = AODJob.create(
+            source_job.spec,
+            provider_name=source_job.provider_name,
+            use_rag=source_job.use_rag,
+            validate_code=source_job.validate_code,
+            output_root=source_job.output_root or None,
+            session_id=source_job.session_id,
+            user_prompt=source_job.user_prompt or source_job.spec.prompt,
+            enhance=False,
+        )
+        job.is_resume = True
+        job.draft_activity_source = source_job.draft_activity_source
+        job.original_activity_source = (
+            source_job.original_activity_source
+            or source_job.draft_activity_source)
+        job.repair_diagnostics = dict(source_job.repair_diagnostics or {})
+        job.repair_plan = dict(source_job.repair_plan or {})
+        job.repair_history = list(source_job.repair_history or [])
+
+        if callback is not None:
+            self.watch(job.job_id, callback)
+
+        with self._lock:
+            self._jobs[job.job_id] = job
+            provider = self._provider_overrides.get(job.provider_name)
+            if provider is None:
+                provider = self._load_saved_provider(job.provider_name)
+            if provider is not None:
+                self._job_providers[job.job_id] = provider
+            self._store.save(job)
+
+        self._notify(job)
+        self._queue.submit(job)
+        return job
+
     def watch(self, job_id, callback):
         with self._lock:
             self._callbacks.setdefault(job_id, []).append(callback)
@@ -351,7 +399,9 @@ class AODService:
         try:
             with self._lock:
                 provider = self._job_providers.get(job.job_id)
-            if job.parent_revision_id:
+            if job.is_resume:
+                result = self._run_resume_job(job, provider)
+            elif job.parent_revision_id:
                 result = self._run_refinement_job(job, provider)
             else:
                 result = generate_activity(
@@ -518,6 +568,27 @@ class AODService:
             cancel_check=lambda: job.cancel_requested,
         )
 
+    def _run_resume_job(self, job, provider):
+        """Continue repairing a preserved failed draft (repair-only)."""
+        from generation.pipeline import resume_repair
+
+        return resume_repair(
+            job.spec,
+            job.draft_activity_source,
+            job.repair_diagnostics or None,
+            output_root=job.output_root or None,
+            provider=provider,
+            provider_name=job.provider_name,
+            current_plan=job.repair_plan or None,
+            validate_code=job.validate_code,
+            progress_cb=lambda stage, fraction, message, metadata=None:
+                self._pipeline_progress(
+                    job, stage, fraction, message, metadata),
+            pace=True,
+            package_bundle=False,
+            cancel_check=lambda: job.cancel_requested,
+        )
+
     def _set_progress(self, job, status, stage, progress, message,
                       metadata=None):
         with self._lock:
@@ -555,6 +626,11 @@ class AODService:
             diagnostics = getattr(error, 'diagnostics', None)
             if isinstance(diagnostics, dict):
                 job.repair_diagnostics = dict(diagnostics)
+            plan = getattr(error, 'plan', None)
+            if isinstance(plan, dict):
+                # Preserve the failed plan so "Continue repairing" keeps the
+                # same bundle_id and version lineage instead of re-planning.
+                job.repair_plan = dict(plan)
             history = getattr(error, 'repair_history', None)
             if isinstance(history, list) and not job.repair_history:
                 job.repair_history = [

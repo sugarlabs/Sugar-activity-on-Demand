@@ -57,6 +57,8 @@ class AODJob:
     draft_activity_source: str = ''
     repair_history: list = field(default_factory=list)
     repair_diagnostics: dict = field(default_factory=dict)
+    repair_plan: dict = field(default_factory=dict)
+    is_resume: bool = False
     error: str = ''
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -90,6 +92,9 @@ class AODJob:
         repair_diagnostics = data.get('repair_diagnostics')
         if not isinstance(repair_diagnostics, dict):
             repair_diagnostics = {}
+        repair_plan = data.get('repair_plan')
+        if not isinstance(repair_plan, dict):
+            repair_plan = {}
         job = cls(
             job_id=data['job_id'],
             spec=ActivitySpec.from_dict(data['spec']),
@@ -117,6 +122,8 @@ class AODJob:
                 else ''),
             repair_history=repair_history,
             repair_diagnostics=repair_diagnostics,
+            repair_plan=repair_plan,
+            is_resume=bool(data.get('is_resume', False)),
             error=data.get('error', ''),
             created_at=data.get('created_at', time.time()),
             updated_at=data.get('updated_at', time.time()),
@@ -148,6 +155,8 @@ class AODJob:
             'draft_activity_source': self.draft_activity_source,
             'repair_history': self.repair_history,
             'repair_diagnostics': self.repair_diagnostics,
+            'repair_plan': self.repair_plan,
+            'is_resume': self.is_resume,
             'error': self.error,
             'created_at': self.created_at,
             'updated_at': self.updated_at,

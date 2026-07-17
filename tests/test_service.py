@@ -154,6 +154,66 @@ class TestAodService(unittest.TestCase):
         self.assertEqual('static_validation',
                          persisted.repair_diagnostics['stage'])
 
+    def test_job_round_trips_resume_fields(self):
+        spec = ActivitySpec('Round Trip', 'Create a quiz.', 'logic_math',
+                            'MIT')
+        job = AODJob.create(spec, provider_name='openai')
+        job.is_resume = True
+        job.repair_plan = {'bundle_id': 'org.sugarlabs.aod.Demo1234567890'}
+        self.store.save(job)
+        restored = self.store.load(job.job_id)
+        self.assertTrue(restored.is_resume)
+        self.assertEqual('org.sugarlabs.aod.Demo1234567890',
+                         restored.repair_plan['bundle_id'])
+
+    def test_resume_repair_finishes_from_preserved_draft(self):
+        from generation.generator import enrich_plan
+        from generation.templates import render_activity_source
+
+        provider = _ResumeRepairProvider()
+        self.service.register_provider(provider)
+        spec = ActivitySpec(
+            'Resume Demo', 'Create a quiz.', 'logic_math', 'MIT',
+            template='quiz')
+        good = render_activity_source(
+            spec, enrich_plan(spec, {'template': 'quiz'}))
+        draft = good.replace(
+            'class GeneratedActivity(activity.Activity):',
+            'class GeneratedActivity(object):')
+
+        failed = AODJob.create(spec, provider_name='openai',
+                               output_root=self.project_root)
+        failed.draft_activity_source = draft
+        failed.repair_diagnostics = {
+            'stage': 'static_validation',
+            'errors': ['Generated source must define exactly one Activity '
+                       'subclass.'],
+            'warnings': [],
+        }
+        failed.repair_plan = enrich_plan(spec, {'template': 'quiz'})
+        failed.fail('Provider could not repair activity code.')
+        self.store.save(failed)
+        with self.service._lock:
+            self.service._jobs[failed.job_id] = failed
+
+        resumed = self.service.resume_repair(failed.job_id)
+        self.assertIsNotNone(resumed)
+        self.assertTrue(resumed.is_resume)
+
+        finished = self._wait_for_terminal(resumed.job_id)
+        self.assertEqual(STATUS_FINISHED, finished.status)
+        self.assertIn('class GeneratedActivity(activity.Activity):',
+                      finished.result.files['activity.py'])
+
+    def test_resume_repair_without_draft_returns_none(self):
+        spec = ActivitySpec('No Draft', 'Create a quiz.', 'logic_math', 'MIT')
+        failed = AODJob.create(spec, provider_name='openai')
+        failed.fail('failed before any draft')
+        self.store.save(failed)
+        with self.service._lock:
+            self.service._jobs[failed.job_id] = failed
+        self.assertIsNone(self.service.resume_repair(failed.job_id))
+
     def test_finished_job_restores_result_after_service_restart(self):
         spec = ActivitySpec(
             'Restore Demo',
@@ -519,6 +579,25 @@ class _RefinementProvider:
             '=======\n'
             'class GeneratedActivity(activity.Activity):\n'
             '    # switch-student repair marker\n'
+            '>>>>>>> REPLACE'
+        )
+
+
+class _ResumeRepairProvider:
+    name = 'openai'
+    label = 'OpenAI'
+    model = 'resume-test'
+
+    def generate_plan(self, system_prompt, user_prompt, timeout=45):
+        return {}
+
+    def generate_text(self, system_prompt, user_prompt, timeout=120,
+                      stream_callback=None):
+        return (
+            '<<<<<<< SEARCH\n'
+            'class GeneratedActivity(object):\n'
+            '=======\n'
+            'class GeneratedActivity(activity.Activity):\n'
             '>>>>>>> REPLACE'
         )
 
