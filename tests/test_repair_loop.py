@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import json
+import os
 import unittest
 
 from generation.repair_loop import RepairCheckResult
 from generation.repair_loop import build_repair_system_prompt
+from generation.repair_loop import build_repair_user_prompt
 from generation.repair_loop import patches_match_uniquely
 from generation.repair_loop import patches_replace_whole_file
 from generation.repair_loop import repair_candidate
@@ -461,6 +463,116 @@ class TestRepairLoop(unittest.TestCase):
             cancel_check=lambda: True, event_callback=broken_callback)
         self.assertEqual('cancelled', result.reason)
         self.assertEqual([], provider.prompts)
+
+
+_FOCUS_HANDLER = '        self.score.increment()'
+_FOCUS_CONNECT = "        button.connect('clicked', self._on_click)"
+
+
+def _large_source():
+    """A >60-line activity whose _on_click handler is far from the __init__
+    that wires it, so focus can meaningfully shrink the prompt."""
+    lines = [
+        'from sugar3.activity import activity',
+        '',
+        '',
+        'class GeneratedActivity(activity.Activity):',
+        '    def __init__(self, handle):',
+        '        activity.Activity.__init__(self, handle)',
+        "        button = ToolButton('go')",
+        _FOCUS_CONNECT,
+        '        self.button = button',
+    ]
+    for index in range(14):
+        lines += [
+            '',
+            '    def _filler_%d(self, widget):' % index,
+            '        value = %d' % index,
+            '        return value',
+        ]
+    lines += ['', '    def _on_click(self, button):', _FOCUS_HANDLER,
+              '        return None', '']
+    return '\n'.join(lines) + '\n'
+
+
+def _runtime_diag(source):
+    line_no = source.split('\n').index(_FOCUS_HANDLER) + 1
+    frame = ('  File "<activity>/activity.py", line %d, in _on_click\n'
+             '    self.score.increment()\n'
+             "AttributeError: 'NoneType' object has no attribute 'increment'"
+             % line_no)
+    return {'stage': 'runtime_check', 'errors': [frame],
+            'runtime_detail': frame}
+
+
+class TestRepairFocus(unittest.TestCase):
+
+    def test_focus_shrinks_prompt_but_still_repairs_full_file(self):
+        source = _large_source()
+        provider = _Provider([_patch(
+            _FOCUS_HANDLER, '        self.score.add(1)')])
+
+        result = repair_candidate(
+            provider, source, _runtime_diag(source),
+            lambda candidate: True)
+
+        self.assertTrue(result.success)
+        self.assertIn('self.score.add(1)', result.source)
+        prompt = provider.prompts[0][1]
+        # The failing handler and its wiring are shown; far filler is elided.
+        self.assertIn(_FOCUS_HANDLER, prompt)
+        self.assertIn(_FOCUS_CONNECT, prompt)
+        self.assertNotIn('def _filler_7', prompt)
+        self.assertIn('elided and unchanged', prompt)
+
+    def test_focus_disabled_env_sends_full_source(self):
+        source = _large_source()
+        provider = _Provider([_patch(
+            _FOCUS_HANDLER, '        self.score.add(1)')])
+
+        previous = os.environ.get('AOD_REPAIR_FOCUS')
+        os.environ['AOD_REPAIR_FOCUS'] = 'off'
+        try:
+            result = repair_candidate(
+                provider, source, _runtime_diag(source),
+                lambda candidate: True)
+        finally:
+            if previous is None:
+                del os.environ['AOD_REPAIR_FOCUS']
+            else:
+                os.environ['AOD_REPAIR_FOCUS'] = previous
+
+        self.assertTrue(result.success)
+        prompt = provider.prompts[0][1]
+        # Whole file present, no focus framing.
+        self.assertIn('def _filler_7', prompt)
+        self.assertNotIn('elided and unchanged', prompt)
+
+    def test_no_location_signal_sends_full_source(self):
+        source = _large_source()
+        provider = _Provider([_patch(
+            _FOCUS_HANDLER, '        self.score.add(1)')])
+
+        result = repair_candidate(
+            provider, source,
+            {'stage': 'static_validation',
+             'errors': ['Forbidden import: subprocess']},
+            lambda candidate: True)
+
+        self.assertTrue(result.success)
+        prompt = provider.prompts[0][1]
+        self.assertIn('def _filler_7', prompt)
+        self.assertNotIn('elided and unchanged', prompt)
+
+    def test_small_source_prompt_is_unchanged(self):
+        # The existing tiny fixture stays on the full-source path unchanged.
+        focused = build_repair_user_prompt(_SOURCE, 'boom', 1)
+        self.assertIn('Current activity.py', focused)
+        self.assertIn('        value = "broken"', focused)
+        self.assertNotIn('elided and unchanged', focused)
+        self.assertEqual(
+            focused, build_repair_user_prompt(_SOURCE, 'boom', 1,
+                                              focused_view=None))
 
 
 def _hash_for_test(source):

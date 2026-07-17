@@ -17,6 +17,7 @@ import hashlib
 import json
 import math
 
+from generation.focus import build_focused_view
 from generation.refine import REPLACE_MARKER
 from generation.refine import SEARCH_MARKER
 from generation.refine import apply_patches
@@ -97,12 +98,18 @@ def build_repair_system_prompt():
 
 
 def build_repair_user_prompt(source, diagnostics, attempt,
-                             previous_feedback='', goal=''):
+                             previous_feedback='', goal='', focused_view=None):
     """Build a repair request around the current, never-discarded source.
 
     ``goal``, when supplied, states the change the repaired source must
     contain.  It lets the repair loop re-apply a requested refinement whose
     first patch failed a gate instead of silently fixing only the diagnostics.
+
+    ``focused_view``, when supplied, is a rendered slice of the failing region
+    (see :func:`generation.focus.build_focused_view`) sent in place of the full
+    source so repair is faster.  It is presentation only: the SHA-256 below and
+    all downstream verification still identify and check the whole ``source``.
+    When it is ``None`` the full source is sent exactly as before.
     """
     parts = [
         'Repair attempt %d.\n' % attempt,
@@ -125,12 +132,26 @@ def build_repair_user_prompt(source, diagnostics, attempt,
             '\n\nThe previous proposal was not committed:\n',
             _diagnostics_text(previous_feedback),
         ])
-    parts.extend([
-        '\n\nCurrent activity.py (%d lines):\n' % source.count('\n'),
-        source.rstrip(),
-        '\n\n---\n\nReturn only minimal exact SEARCH/REPLACE blocks. '
-        'FULLREGEN and complete-file output are forbidden.',
-    ])
+    if focused_view:
+        parts.extend([
+            '\n\nThe full activity.py is %d lines. Only the failing region '
+            'and the code that wires it are shown below; every other region '
+            'is elided and unchanged:\n' % source.count('\n'),
+            focused_view.rstrip(),
+            '\n\n---\n\nThe lines above are copied verbatim from the current '
+            'file. Copy SEARCH sections exactly from them, including '
+            'indentation. Keep each SEARCH block small but unique in the '
+            'whole file -- 3-10 lines is ideal. Do not reference or edit '
+            'elided regions. Return only minimal exact SEARCH/REPLACE blocks. '
+            'FULLREGEN and complete-file output are forbidden.',
+        ])
+    else:
+        parts.extend([
+            '\n\nCurrent activity.py (%d lines):\n' % source.count('\n'),
+            source.rstrip(),
+            '\n\n---\n\nReturn only minimal exact SEARCH/REPLACE blocks. '
+            'FULLREGEN and complete-file output are forbidden.',
+        ])
     return ''.join(parts)
 
 
@@ -295,12 +316,17 @@ def repair_candidate(provider, source, diagnostics, verify_candidate,
                 attempt - 1, history, snapshots, original_hash,
             )
         before_hash = _source_hash(active_source)
+        # Focus is recomputed each attempt because a committed intermediate
+        # changes the active source and diagnostics.  It only shrinks what the
+        # prompt shows; every check below still runs against active_source.
+        focused_view = build_focused_view(active_source, active_diagnostics)
         user_prompt = build_repair_user_prompt(
             active_source,
             active_diagnostics,
             attempt,
             previous_feedback=previous_feedback,
             goal=goal,
+            focused_view=focused_view,
         )
         try:
             if timeout is None:
