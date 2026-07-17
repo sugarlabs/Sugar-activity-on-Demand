@@ -8339,6 +8339,7 @@ if clipboard.wait_is_text_available():
             self._prompt_status_label.set_text(_('Exported'))
         self._append_chat_message(
             _('XO bundle exported to %s') % destination)
+        self._show_export_result(_('XO bundle exported'), destination)
 
     def __export_flatpak_cb(self, button):
         if self._generation_result is None:
@@ -8442,10 +8443,17 @@ if clipboard.wait_is_text_available():
             if export['kind'] == 'flatpak':
                 self._append_chat_message(
                     _('Flatpak bundle exported to %s') % destination)
+                self._show_export_result(
+                    _('Flatpak bundle exported'), destination)
             else:
                 self._append_chat_message(
                     _('Flatpak sources exported to %s. Run flatpak-builder '
                       'to build the bundle.') % destination)
+                self._show_export_result(
+                    _('Flatpak sources exported'), destination,
+                    note=export.get('reason', '') or _(
+                        'Run flatpak-builder on these sources to build the '
+                        'installable bundle.'))
             return False
         finally:
             self._flatpak_export_running = False
@@ -8476,6 +8484,85 @@ if clipboard.wait_is_text_available():
                 self._prompt_status_label.set_text(_('Install failed'))
             self._append_chat_message(_('Install failed: %s') % error)
             return
+
+        if self._prompt_status_label is not None:
+            self._prompt_status_label.set_text(_('Installed'))
+        self._append_chat_message(
+            _('Installed to %s and opened with sugar-activity3.')
+            % install_path)
+        self._show_export_result(
+            _('Activity installed'), install_path,
+            note=_('Opened with sugar-activity3. You can also launch it '
+                   'from the Sugar home view.'))
+
+    def _show_export_result(self, title, path, note=''):
+        """Confirm where an exported/installed artifact landed.
+
+        Offers quick "Reveal in files" and "Copy path" actions so the learner
+        can find the bundle without hunting through the profile directory.
+        """
+        body = path
+        size_text = self._format_file_size(path)
+        if size_text:
+            body = '%s\n%s' % (path, size_text)
+        if note:
+            body = '%s\n\n%s' % (body, note)
+        try:
+            dialog = Gtk.MessageDialog(
+                parent=self.get_toplevel(),
+                modal=True,
+                message_type=Gtk.MessageType.INFO,
+                buttons=Gtk.ButtonsType.NONE,
+                text=title,
+            )
+        except Exception:
+            logging.exception('Could not show export result dialog')
+            return
+        dialog.format_secondary_text(body)
+        dialog.add_button(_('Reveal in files'), 1)
+        dialog.add_button(_('Copy path'), 2)
+        dialog.add_button(_('Close'), Gtk.ResponseType.CLOSE)
+        while True:
+            response = dialog.run()
+            if response == 1:
+                self._reveal_in_files(path)
+                continue
+            if response == 2:
+                self._copy_to_clipboard(path)
+                continue
+            break
+        dialog.destroy()
+
+    def _reveal_in_files(self, path):
+        target = path if os.path.isdir(path) else os.path.dirname(path)
+        try:
+            subprocess.Popen(['xdg-open', target])
+        except OSError:
+            logging.exception('Could not open the file manager')
+
+    def _copy_to_clipboard(self, text):
+        try:
+            clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            clipboard.set_text(text, -1)
+            clipboard.store()
+        except Exception:
+            logging.exception('Could not copy the path to the clipboard')
+
+    @staticmethod
+    def _format_file_size(path):
+        try:
+            if os.path.isdir(path):
+                return ''
+            size = float(os.path.getsize(path))
+        except OSError:
+            return ''
+        for unit in ('bytes', 'KB', 'MB', 'GB'):
+            if size < 1024 or unit == 'GB':
+                if unit == 'bytes':
+                    return '%d %s' % (int(size), unit)
+                return '%.1f %s' % (size, unit)
+            size /= 1024.0
+        return ''
 
         if self._prompt_status_label is not None:
             self._prompt_status_label.set_text(_('Opening'))
