@@ -180,6 +180,12 @@ _CSS_TEMPLATE = '''
                 border-radius: 999px;
                 background-color: %(studio_lavender_border)s;
             }
+            .create-ai-generation-percent {
+                color: #3a3a3a;
+                font-weight: 300;
+                font-size: 40px;
+                letter-spacing: 1px;
+            }
             .create-ai-generation-stage {
                 color: #888;
                 font-weight: 400;

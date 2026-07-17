@@ -149,10 +149,14 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._preview_generation_spinner = None
         self._preview_generation_progress = None
         self._preview_generation_stage = None
+        self._preview_generation_percent = None
+        self._preview_generation_bar = None
         self._preview_generation_steps = []
         self._generation_animation_id = 0
         self._generation_animation_hide_id = 0
         self._preview_generation_xo = None
+        self._xo_surface = None
+        self._xo_surface_key = None
         self._preview_generation_fun = None
         self._generation_tick_count = 0
         self._generation_has_fraction = False
@@ -164,6 +168,9 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._generation_final_rgb = None
         self._generation_fun_next = None
         self._generation_fun_alpha = 1.0
+        self._generation_stage_message = ''
+        self._generation_stage_next = None
+        self._generation_stage_alpha = 0.0
         self._generation_target_fraction = None
         self._generation_shown_fraction = 0.0
         self._generation_fraction_mix = 0.0
@@ -1766,62 +1773,80 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._generation_final_rgb = None
         self._generation_fun_next = None
         self._generation_fun_alpha = 1.0
+        self._generation_stage_message = ''
+        self._generation_stage_next = None
+        self._generation_stage_alpha = 0.0
         self._generation_target_fraction = None
         self._generation_shown_fraction = 0.0
         self._generation_fraction_mix = 0.0
         self._generation_done_at = None
         self._generation_fade_widgets = []
 
-        xo_icon = None
+        # A balanced pair of expanding spacers keeps the whole group
+        # optically centred in the preview panel, whatever its height.
+        top_spacer = Gtk.Box()
+        self._preview_content_box.pack_start(top_spacer, True, True, 0)
+        top_spacer.show()
+
+        group = Gtk.VBox(spacing=style.zoom(10))
+        group.set_valign(Gtk.Align.CENTER)
+        self._preview_content_box.pack_start(group, False, False, 0)
+        group.show()
+
+        # The XO is drawn straight onto the canvas (not an overlaid
+        # widget) so it can be transformed — it spins a full turn in 3D
+        # space while it builds.
+        self._preview_generation_xo = None
+        self._xo_surface = None
+        self._xo_surface_key = None
         canvas = None
         try:
-            stroke, fill = self._xo_pulse_color(0)
-            xo_icon = Icon(icon_name='computer-xo',
-                           pixel_size=style.zoom(120),
-                           stroke_color=stroke,
-                           fill_color=fill)
-        except Exception:
-            logging.exception('Could not create pulsing XO icon')
-        self._preview_generation_xo = xo_icon
-        if xo_icon is not None:
-            size = style.zoom(200)
+            size = style.zoom(220)
             canvas = Gtk.DrawingArea()
             canvas.set_size_request(size, size)
             canvas.connect('draw', self._draw_generation_canvas)
             self._preview_generation_canvas = canvas
-
-            overlay = Gtk.Overlay()
-            overlay.set_halign(Gtk.Align.CENTER)
-            overlay.set_margin_top(style.zoom(4))
-            overlay.add(canvas)
+            canvas.set_halign(Gtk.Align.CENTER)
+            canvas.set_valign(Gtk.Align.CENTER)
+            canvas.set_margin_top(style.zoom(18))
+            canvas.set_margin_bottom(style.zoom(14))
+            group.pack_start(canvas, False, False, 0)
             canvas.show()
-
-            xo_icon.set_halign(Gtk.Align.CENTER)
-            xo_icon.set_valign(Gtk.Align.CENTER)
-            overlay.add_overlay(xo_icon)
-            xo_icon.show()
-
-            self._preview_content_box.pack_start(overlay, False, False, 0)
-            overlay.show()
             canvas.add_tick_callback(self._generation_canvas_tick)
+        except Exception:
+            logging.exception('Could not create generation canvas')
 
         title = Gtk.Label(_('Building your activity'))
         self._preview_empty_title = title
         title.get_style_context().add_class('create-ai-preview-title')
         title.set_justify(Gtk.Justification.CENTER)
-        self._preview_content_box.pack_start(title, False, False, 0)
+        title.set_margin_top(style.zoom(6))
+        group.pack_start(title, False, False, 0)
         title.show()
 
-        note = Gtk.Label(
-            _('Turning your idea into a real Sugar activity'))
-        self._preview_empty_note = note
-        note.get_style_context().add_class('create-ai-meta-note')
-        note.set_justify(Gtk.Justification.CENTER)
-        note.set_line_wrap(True)
-        note.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        note.set_max_width_chars(70)
-        self._preview_content_box.pack_start(note, False, False, 0)
-        note.show()
+        # No verbose note during the build — the hero is the percentage.
+        self._preview_empty_note = None
+
+        # A large, light percentage that counts smoothly up — the calm
+        # centrepiece of the whole screen.
+        percent = Gtk.Label('0%')
+        self._preview_generation_percent = percent
+        percent.get_style_context().add_class('create-ai-generation-percent')
+        percent.set_justify(Gtk.Justification.CENTER)
+        percent.set_margin_top(style.zoom(4))
+        group.pack_start(percent, False, False, 0)
+        percent.show()
+
+        # A slim, rounded progress bar with a soft gradient fill sits
+        # under the number — the quiet linear companion to the big count.
+        bar = Gtk.DrawingArea()
+        self._preview_generation_bar = bar
+        bar.set_size_request(style.zoom(210), style.zoom(6))
+        bar.set_halign(Gtk.Align.CENTER)
+        bar.set_margin_top(style.zoom(10))
+        bar.connect('draw', self._draw_generation_bar)
+        group.pack_start(bar, False, False, 0)
+        bar.show()
 
         if canvas is None:
             # No orbit canvas to close into a progress ring, so fall
@@ -4704,6 +4729,48 @@ if clipboard.wait_is_text_available():
                 self._generation_fun_alpha = min(
                     1.0, self._generation_fun_alpha + dt * 4.0)
 
+        # The status line: crossfade the step message on change, and let
+        # the percent count smoothly up alongside the closing ring.
+        stage_lbl = self._preview_generation_stage
+        if stage_lbl is not None and not self._generation_anim_done:
+            if self._generation_stage_next is not None:
+                self._generation_stage_alpha = max(
+                    0.0, self._generation_stage_alpha - dt * 4.0)
+                if self._generation_stage_alpha == 0.0:
+                    self._generation_stage_message = \
+                        self._generation_stage_next
+                    self._generation_stage_next = None
+            elif self._generation_stage_alpha < 1.0:
+                self._generation_stage_alpha = min(
+                    1.0, self._generation_stage_alpha + dt * 4.0)
+
+            base = self._generation_stage_message
+            if base:
+                # Three dots ripple in sequence — a gentle "at work"
+                # pulse. Alpha (not count) animates, so width never
+                # shifts and the centered line stays perfectly still.
+                dots = ''
+                for i in range(3):
+                    ph = (self._generation_anim_t * 1.5 - i * 0.28) % 1.0
+                    glow = 0.28 + 0.72 * (0.5 + 0.5 * math.cos(
+                        ph * 2.0 * math.pi))
+                    dots += '<span alpha="%d%%">.</span>' % int(glow * 100)
+                stage_lbl.set_markup(
+                    '%s<span size="larger">%s</span>' % (
+                        GLib.markup_escape_text(base), dots))
+            stage_lbl.set_opacity(self._generation_stage_alpha)
+
+        # The hero percentage counts smoothly up; the '%' sits smaller
+        # and dimmer beside the number for a refined, typographic feel.
+        percent_lbl = self._preview_generation_percent
+        if percent_lbl is not None and not self._generation_anim_done:
+            pct = int(round(self._generation_shown_fraction * 100))
+            percent_lbl.set_markup(
+                '{n}<span size="46%" alpha="50%"> %</span>'.format(n=pct))
+        if self._preview_generation_bar is not None and \
+                not self._generation_anim_done:
+            self._preview_generation_bar.queue_draw()
+
         # Staggered entrance fades; afterwards opacities hold steady
         # (GTK ignores set_opacity calls with an unchanged value).
         for child, delay in self._generation_fade_widgets:
@@ -4717,129 +4784,342 @@ if clipboard.wait_is_text_available():
         widget.queue_draw()
         return GLib.SOURCE_CONTINUE
 
+    @staticmethod
+    def _orbit_point(center_x, center_y, rx, ry, angle):
+        return (center_x + rx * math.cos(angle),
+                center_y + ry * math.sin(angle))
+
+    @staticmethod
+    def _rounded_rect(cr, x, y, w, h, r):
+        r = max(0.0, min(r, w / 2.0, h / 2.0))
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+
+    def _draw_generation_bar(self, widget, cr):
+        alloc = widget.get_allocation()
+        w = float(alloc.width)
+        h = float(alloc.height)
+        r = h / 2.0
+        frac = max(0.0, min(1.0, self._generation_shown_fraction))
+
+        # Track: a faint rounded groove.
+        self._rounded_rect(cr, 0, 0, w, h, r)
+        cr.set_source_rgba(0, 0, 0, 0.06)
+        cr.fill()
+
+        if frac <= 0.002:
+            return False
+
+        if self._generation_anim_done and \
+                self._generation_final_rgb is not None:
+            stroke_rgb, fill_rgb = self._generation_final_rgb
+        else:
+            stroke_rgb, fill_rgb = self._generation_wheel_rgb(
+                self._generation_anim_t / 6.0)
+
+        t = self._generation_anim_t
+        fill_w = max(h, frac * w)
+        self._rounded_rect(cr, 0, 0, fill_w, h, r)
+        grad = cairo.LinearGradient(0, 0, max(1.0, fill_w), 0)
+        grad.add_color_stop_rgba(0.0, *fill_rgb, 0.85)
+        grad.add_color_stop_rgba(1.0, *stroke_rgb, 0.95)
+        cr.set_source(grad)
+        cr.fill()
+
+        # A soft light glints along the filled bar and rests, echoing the
+        # sheen on the logo so the two read as one design.
+        if not self._generation_anim_done:
+            cr.save()
+            self._rounded_rect(cr, 0, 0, fill_w, h, r)
+            cr.clip()
+            period = 2.6
+            phase = (t % period) / period
+            if phase < 0.66:
+                p = phase / 0.66
+                p = p * p * (3.0 - 2.0 * p)
+                band = fill_w * 0.28 + h
+                gx = p * (fill_w + 2.0 * band) - band
+                sheen = cairo.LinearGradient(gx - band, 0, gx + band, 0)
+                sheen.add_color_stop_rgba(0.0, 1, 1, 1, 0.0)
+                sheen.add_color_stop_rgba(0.5, 1, 1, 1, 0.30)
+                sheen.add_color_stop_rgba(1.0, 1, 1, 1, 0.0)
+                cr.set_source(sheen)
+                cr.paint()
+            cr.restore()
+
+        # A soft glow at the leading edge, gently breathing like the ring.
+        if not self._generation_anim_done:
+            breath = 0.5 + 0.5 * math.sin(t * 2.0 * math.pi / 1.9)
+            hx = min(w, fill_w)
+            radius = h * (1.35 + 0.55 * breath)
+            glow = cairo.RadialGradient(hx, h / 2.0, 0,
+                                        hx, h / 2.0, radius)
+            glow.add_color_stop_rgba(0.0, *stroke_rgb,
+                                     0.45 + 0.30 * breath)
+            glow.add_color_stop_rgba(1.0, *stroke_rgb, 0.0)
+            cr.set_source(glow)
+            cr.arc(hx, h / 2.0, radius, 0, 2.0 * math.pi)
+            cr.fill()
+        return False
+
+    def _stroke_orbit_ellipse(self, cr, center_x, center_y, rx, ry,
+                              stroke_rgb, alpha, width=None):
+        if alpha <= 0.005:
+            return
+        segments = 64
+        cr.set_line_width(width or max(1, style.zoom(1)))
+        cr.set_source_rgba(*stroke_rgb, alpha)
+        for i in range(segments + 1):
+            angle = i * 2.0 * math.pi / segments
+            x, y = self._orbit_point(center_x, center_y, rx, ry, angle)
+            if i == 0:
+                cr.move_to(x, y)
+            else:
+                cr.line_to(x, y)
+        cr.stroke()
+
+    @staticmethod
+    def _rgb_to_hex(rgb):
+        r, g, b = (max(0, min(255, int(round(c * 255)))) for c in rgb[:3])
+        return '#%02x%02x%02x' % (r, g, b)
+
+    def _get_xo_surface(self, size, stroke_hex, fill_hex):
+        # Rasterise the recoloured XO once per (size, colour) and cache
+        # it — the SVG is only re-rendered when the colour actually steps.
+        key = (size, stroke_hex, fill_hex)
+        if key == self._xo_surface_key and self._xo_surface is not None:
+            return self._xo_surface
+        surface = None
+        try:
+            buf = _IconBuffer()
+            buf.icon_name = 'computer-xo'
+            buf.width = size
+            buf.height = size
+            buf.stroke_color = stroke_hex
+            buf.fill_color = fill_hex
+            surface = buf.get_surface()
+        except Exception:
+            logging.exception('Could not render spinning XO surface')
+            surface = None
+        self._xo_surface = surface
+        self._xo_surface_key = key
+        return surface
+
+    def _draw_spinning_xo(self, cr, cx, cy, t, stroke_hex, fill_hex,
+                          entrance, spinning=True):
+        size = style.zoom(120)
+        surface = self._get_xo_surface(size, stroke_hex, fill_hex)
+        if surface is None:
+            return
+        iw = surface.get_width()
+        ih = surface.get_height()
+        base_alpha = min(1.0, entrance)
+
+        # A whisper of vertical float so the logo feels alive without any
+        # motion that pulls the eye.
+        float_y = 0.0
+        if spinning:
+            float_y = math.sin(t * 2.0 * math.pi / 4.6) * style.zoom(2)
+
+        cr.save()
+        # Work with the surface's top-left at the origin.
+        cr.translate(cx - iw / 2.0, cy - ih / 2.0 + float_y)
+
+        # The logo rests still; the animation is a soft, layered sheen.
+        cr.set_source_surface(surface, 0, 0)
+        cr.paint_with_alpha(base_alpha)
+
+        if spinning:
+            # A gentle light glides diagonally across the logo, then rests
+            # before the next pass. Everything is masked by the XO itself,
+            # so only the logo catches the light — warm, glossy, subtle.
+            period = 3.2
+            sweep_fraction = 0.62         # sheen crosses, then a calm pause
+            phase = (t % period) / period
+            if phase < sweep_fraction:
+                p = phase / sweep_fraction
+                p = p * p * (3.0 - 2.0 * p)   # ease in and out
+                band = iw * 0.5
+                x_center = p * (iw + 2.0 * band) - band
+                tilt = ih * 0.30
+
+                # Main sweep: a soft, warm-white band.
+                warm = (1.0, 0.97, 0.90)
+                grad = cairo.LinearGradient(
+                    x_center - band, ih * 0.5 - tilt,
+                    x_center + band, ih * 0.5 + tilt)
+                peak = 0.46 * base_alpha
+                grad.add_color_stop_rgba(0.0, *warm, 0.0)
+                grad.add_color_stop_rgba(0.44, *warm, 0.0)
+                grad.add_color_stop_rgba(0.5, *warm, peak)
+                grad.add_color_stop_rgba(0.56, *warm, 0.0)
+                grad.add_color_stop_rgba(1.0, *warm, 0.0)
+                cr.set_source(grad)
+                cr.mask_surface(surface, 0, 0)
+
+                # A small specular hotspot rides with the sweep — a glossy
+                # highlight point that glides across the surface.
+                spec_x = x_center
+                spec_y = ih * 0.42
+                spec_r = iw * 0.24
+                spec = cairo.RadialGradient(
+                    spec_x, spec_y, 0.0, spec_x, spec_y, spec_r)
+                spec.add_color_stop_rgba(0.0, 1, 1, 1, 0.32 * base_alpha)
+                spec.add_color_stop_rgba(1.0, 1, 1, 1, 0.0)
+                cr.set_source(spec)
+                cr.mask_surface(surface, 0, 0)
+        cr.restore()
+
     def _draw_generation_canvas(self, widget, cr):
         alloc = widget.get_allocation()
         center_x = alloc.width / 2.0
         center_y = alloc.height / 2.0
         t = self._generation_anim_t
-        orbit_radius = style.zoom(78)
+        orbit_radius = style.zoom(80)
 
-        # Everything eases in together over the first beat.
-        entrance = max(0.0, min(1.0, t / 0.7))
+        # Everything eases in together, unhurried.
+        entrance = max(0.0, min(1.0, t / 0.9))
         entrance = entrance * entrance * (3.0 - 2.0 * entrance)
 
         if self._generation_anim_done and \
                 self._generation_final_rgb is not None:
             stroke_rgb, fill_rgb = self._generation_final_rgb
         else:
-            stroke_rgb, fill_rgb = self._generation_wheel_rgb(t / 0.8)
+            # Drift slowly through the XO colors so the hue barely shifts.
+            stroke_rgb, fill_rgb = self._generation_wheel_rgb(t / 6.0)
 
-        # A soft halo breathing behind the XO, like a slow heartbeat.
-        breath = 0.5 + 0.5 * math.sin(t * 2.0 * math.pi / 3.2)
+        # A soft halo breathing behind the XO, like a slow, calm breath.
+        breath = 0.5 + 0.5 * math.sin(t * 2.0 * math.pi / 5.0)
         if self._generation_anim_done:
-            breath = 0.75
-        halo_radius = style.zoom(58) + style.zoom(10) * breath
-        halo = cairo.RadialGradient(center_x, center_y, style.zoom(20),
+            breath = 0.6
+        halo_radius = style.zoom(52) + style.zoom(8) * breath
+        halo = cairo.RadialGradient(center_x, center_y, style.zoom(26),
                                     center_x, center_y, halo_radius)
-        halo_alpha = (0.10 + 0.10 * breath) * entrance
+        halo_alpha = (0.05 + 0.05 * breath) * entrance
         halo.add_color_stop_rgba(0.0, *fill_rgb, halo_alpha)
         halo.add_color_stop_rgba(1.0, *fill_rgb, 0.0)
         cr.set_source(halo)
         cr.arc(center_x, center_y, halo_radius, 0, 2.0 * math.pi)
         cr.fill()
 
+        # The orbit plane tips slowly forward and back, so the ring
+        # reads as spinning gently in 3D space around the XO. ry never
+        # collapses fully, keeping it graceful rather than a flat line.
+        tilt_phase = 0.5 + 0.5 * math.sin(t * 2.0 * math.pi / 9.0)
+        if self._generation_anim_done:
+            tilt_phase = 0.85
+        ry = orbit_radius * (0.34 + 0.30 * tilt_phase)
+        rx = orbit_radius
+
         if self._generation_anim_done:
             # Settled: a calm, complete ring in the learner's colors,
             # marked once by a soft outward ripple.
-            cr.set_source_rgba(*stroke_rgb, 0.45)
-            cr.set_line_width(style.zoom(3))
-            cr.arc(center_x, center_y, orbit_radius, 0, 2.0 * math.pi)
-            cr.stroke()
+            self._stroke_orbit_ellipse(cr, center_x, center_y, rx, ry,
+                                       stroke_rgb, 0.32,
+                                       max(1, style.zoom(2)))
             if self._generation_done_at is not None:
-                ripple = (t - self._generation_done_at) / 0.7
+                ripple = (t - self._generation_done_at) / 0.9
                 if 0.0 <= ripple < 1.0:
-                    cr.set_source_rgba(*stroke_rgb, 0.30 * (1.0 - ripple))
-                    cr.set_line_width(max(1, style.zoom(2)))
-                    cr.arc(center_x, center_y,
-                           orbit_radius + style.zoom(18) * ripple,
-                           0, 2.0 * math.pi)
-                    cr.stroke()
+                    fade = (1.0 - ripple) * (1.0 - ripple)
+                    grow = 1.0 + 0.20 * ripple
+                    self._stroke_orbit_ellipse(
+                        cr, center_x, center_y, rx * grow, ry * grow,
+                        stroke_rgb, 0.25 * fade, max(1, style.zoom(1)))
+            # Settled: the XO comes to rest facing forward.
+            self._draw_spinning_xo(
+                cr, center_x, center_y, t,
+                self._rgb_to_hex(stroke_rgb), self._rgb_to_hex(fill_rgb),
+                1.0, spinning=False)
             return False
 
-        # Faint guide ring the comet travels on.
-        cr.set_line_width(style.zoom(2))
-        cr.set_source_rgba(*stroke_rgb, 0.10 * entrance)
-        cr.arc(center_x, center_y, orbit_radius, 0, 2.0 * math.pi)
-        cr.stroke()
-
-        # Tiny seeds drifting the other way, barely there.
-        seed_angle = -t * 2.0 * math.pi / 14.0
-        for i in range(3):
-            angle = seed_angle + i * 2.0 * math.pi / 3.0
-            cr.set_source_rgba(*stroke_rgb, 0.16 * entrance)
-            cr.arc(center_x + orbit_radius * math.cos(angle),
-                   center_y + orbit_radius * math.sin(angle),
-                   max(2, style.zoom(2)), 0, 2.0 * math.pi)
-            cr.fill()
+        # A whisper-thin guide ellipse the sweep travels on.
+        self._stroke_orbit_ellipse(cr, center_x, center_y, rx, ry,
+                                   stroke_rgb, 0.07 * entrance)
 
         mix = self._generation_fraction_mix
         free_alpha = (1.0 - mix) * entrance
         if free_alpha > 0.01:
-            # While progress is unknown the comet roams freely; a touch
-            # of sinusoidal drift keeps the motion organic.
-            head_angle = t * 2.0 * math.pi / 4.5 - math.pi / 2.0 + \
-                0.15 * math.sin(t * 0.7)
-            self._draw_generation_comet(
-                cr, center_x, center_y, orbit_radius, head_angle,
+            # While progress is unknown, a single slow sweep glides
+            # around the tilted ring, trailing a soft fade behind it.
+            head_angle = t * 2.0 * math.pi / 7.0 - math.pi / 2.0
+            self._draw_generation_sweep(
+                cr, center_x, center_y, rx, ry, head_angle,
                 stroke_rgb, fill_rgb, free_alpha)
 
         if mix > 0.01 and self._generation_shown_fraction > 0.002:
-            # Real progress: the ring closes as the work completes,
-            # with the comet as the pen drawing it.
+            # Real progress: the ring quietly closes as work completes.
             arc_alpha = mix * entrance
             start = -math.pi / 2.0
-            end = start + \
-                2.0 * math.pi * self._generation_shown_fraction
-            cr.set_source_rgba(*stroke_rgb, 0.40 * arc_alpha)
-            cr.set_line_width(style.zoom(3))
-            cr.arc(center_x, center_y, orbit_radius, start, end)
+            span = 2.0 * math.pi * self._generation_shown_fraction
+            steps = max(2, int(span / (math.pi / 32)))
+            cr.set_line_width(max(1, style.zoom(2)))
+            cr.set_source_rgba(*stroke_rgb, 0.45 * arc_alpha)
+            for i in range(steps + 1):
+                angle = start + span * i / steps
+                x, y = self._orbit_point(center_x, center_y, rx, ry, angle)
+                if i == 0:
+                    cr.move_to(x, y)
+                else:
+                    cr.line_to(x, y)
             cr.stroke()
-            self._draw_generation_comet_head(
-                cr, center_x, center_y, orbit_radius, end,
+            self._draw_generation_head(
+                cr, center_x, center_y, rx, ry, start + span,
                 stroke_rgb, fill_rgb, arc_alpha)
+
+        # The logo spins a full turn in 3D on top of the orbit. Its
+        # colour steps slowly through the XO wheel (discrete so the SVG
+        # is only re-rasterised occasionally, not every frame).
+        xo_stroke, xo_fill = self._xo_pulse_color(int(t / 1.2))
+        self._draw_spinning_xo(
+            cr, center_x, center_y, t, xo_stroke, xo_fill, entrance,
+            spinning=True)
         return False
 
-    def _draw_generation_comet(self, cr, center_x, center_y, radius,
+    def _draw_generation_sweep(self, cr, center_x, center_y, rx, ry,
                                head_angle, stroke_rgb, fill_rgb, alpha):
-        tail_span = math.radians(110)
-        segments = 22
-        cr.set_line_width(style.zoom(3))
-        for i in range(segments):
-            frac0 = i / float(segments)
-            frac1 = (i + 1) / float(segments)
-            cr.set_source_rgba(
-                *stroke_rgb, 0.5 * alpha * (1.0 - frac0) ** 1.7)
-            cr.arc(center_x, center_y, radius,
-                   head_angle - tail_span * frac1,
-                   head_angle - tail_span * frac0)
-            cr.stroke()
-        self._draw_generation_comet_head(
-            cr, center_x, center_y, radius, head_angle,
+        # A short, softly fading trail — restrained, not a comet. It
+        # dims on the far side of the orbit and brightens on the near
+        # side, selling the sense of depth.
+        tail_span = math.radians(70)
+        segments = 20
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_width(max(1, style.zoom(2)))
+        prev = None
+        for i in range(segments + 1):
+            frac = i / float(segments)
+            angle = head_angle - tail_span * frac
+            point = self._orbit_point(center_x, center_y, rx, ry, angle)
+            if prev is not None:
+                depth = 0.55 + 0.45 * (0.5 + 0.5 * math.sin(angle))
+                cr.set_source_rgba(
+                    *stroke_rgb,
+                    0.30 * alpha * depth * (1.0 - frac) ** 2.0)
+                cr.move_to(*prev)
+                cr.line_to(*point)
+                cr.stroke()
+            prev = point
+        self._draw_generation_head(
+            cr, center_x, center_y, rx, ry, head_angle,
             stroke_rgb, fill_rgb, alpha)
 
-    def _draw_generation_comet_head(self, cr, center_x, center_y, radius,
-                                    angle, stroke_rgb, fill_rgb, alpha):
-        head_x = center_x + radius * math.cos(angle)
-        head_y = center_y + radius * math.sin(angle)
+    def _draw_generation_head(self, cr, center_x, center_y, rx, ry,
+                              angle, stroke_rgb, fill_rgb, alpha):
+        head_x, head_y = self._orbit_point(center_x, center_y, rx, ry, angle)
+        depth = 0.55 + 0.45 * (0.5 + 0.5 * math.sin(angle))
+        alpha = alpha * depth
         glow = cairo.RadialGradient(head_x, head_y, 0,
-                                    head_x, head_y, style.zoom(9))
-        glow.add_color_stop_rgba(0.0, *stroke_rgb, 0.8 * alpha)
+                                    head_x, head_y, style.zoom(7))
+        glow.add_color_stop_rgba(0.0, *stroke_rgb, 0.5 * alpha)
         glow.add_color_stop_rgba(1.0, *stroke_rgb, 0.0)
         cr.set_source(glow)
-        cr.arc(head_x, head_y, style.zoom(9), 0, 2.0 * math.pi)
+        cr.arc(head_x, head_y, style.zoom(7), 0, 2.0 * math.pi)
         cr.fill()
-        cr.set_source_rgba(*fill_rgb, 0.9 * alpha)
-        cr.arc(head_x, head_y, max(3, style.zoom(3)), 0, 2.0 * math.pi)
+        cr.set_source_rgba(*fill_rgb, 0.85 * alpha)
+        cr.arc(head_x, head_y, max(2, style.zoom(2)), 0, 2.0 * math.pi)
         cr.fill()
 
     def _pulse_generation_progress(self):
@@ -4883,7 +5163,10 @@ if clipboard.wait_is_text_available():
                 self._preview_generation_progress.set_fraction(
                     max(0.0, min(0.98, float(fraction))))
         if self._preview_generation_stage is not None:
-            self._preview_generation_stage.set_text(message)
+            # Hand the message to the crossfade; the tick eases the old
+            # line out and the new one in, and keeps the percent counting.
+            if message and message != self._generation_stage_message:
+                self._generation_stage_next = message
             self._preview_generation_stage.show()
         self._set_generation_step_active(
             self._generation_step_index_for_stage(stage))
@@ -4912,7 +5195,16 @@ if clipboard.wait_is_text_available():
         self._generation_anim_done = True
         self._generation_target_fraction = 1.0
         self._generation_done_at = self._generation_anim_t
+        if self._preview_generation_percent is not None:
+            self._preview_generation_percent.set_opacity(1.0)
+            self._preview_generation_percent.set_markup(
+                '100<span size="46%" alpha="50%"> %</span>')
+        if self._preview_generation_bar is not None:
+            self._preview_generation_bar.queue_draw()
         if self._preview_generation_stage is not None:
+            self._generation_stage_next = None
+            self._generation_stage_alpha = 1.0
+            self._preview_generation_stage.set_opacity(1.0)
             self._preview_generation_stage.set_text(
                 _('Your activity is ready!'))
             self._preview_generation_stage.show()
