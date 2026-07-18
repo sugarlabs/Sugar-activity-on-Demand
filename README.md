@@ -16,6 +16,20 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/sugarlabs/Sugar-activity-on-Demand/releases/latest/download/Sugar_Activity_Studio-x86_64.AppImage">
+    <img alt="Download the latest AppImage" src="https://img.shields.io/badge/%E2%AC%87%20Download-latest%20AppImage-e8663f?style=for-the-badge">
+  </a>
+  &nbsp;
+  <a href="https://github.com/sugarlabs/Sugar-activity-on-Demand/releases/latest">
+    <img alt="All releases" src="https://img.shields.io/badge/All%20releases-24292f?style=for-the-badge">
+  </a>
+</p>
+
+<p align="center">
+  <sub>One clickable file — GTK, PyGObject, and the Sugar toolkit bundled in. Works on a modern x86_64 Linux desktop with nothing installed. See <a href="#portable-appimage-one-clickable-file">Portable AppImage</a>.</sub>
+</p>
+
+<p align="center">
   <a href="#features">Features</a> ·
   <a href="#requirements">Requirements</a> ·
   <a href="#setup--run">Setup</a> ·
