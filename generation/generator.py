@@ -615,6 +615,94 @@ def normalize_plan(spec, plan):
     return normalized
 
 
+# Appended to every generated activity.py so the shipped activity always
+# looks like a modern Sugar activity -- titled cards, rounded controls --
+# regardless of how the model styled it.  It touches ONLY this activity's own
+# widgets (via style classes on its canvas tree) and a class-scoped
+# stylesheet, so nothing else on the screen is affected (safe even in the
+# studio's in-process preview).  Uses only the allowlisted `gi` runtime.
+_AOD_AUTOSTYLE = '''
+
+# --- Sugar Activity Studio: automatic visual polish -------------------------
+def _aod_install_theme():
+    try:
+        import gi
+        gi.require_version('Gtk', '3.0')
+        from gi.repository import Gdk, Gtk
+    except Exception:
+        return
+    screen = Gdk.Screen.get_default()
+    if screen is None or getattr(screen, '_aod_theme_done', False):
+        return
+    css = b""".aod-card {
+        background-color: #ffffff;
+        border: 1px solid alpha(#1d2b3a, 0.10);
+        border-radius: 14px;
+        padding: 12px;
+    }
+    .aod-card > label { font-weight: bold; color: #2f6fb0; }
+    .aod-heading { font-weight: bold; color: #2f6fb0; }
+    .aod-btn { border-radius: 10px; padding: 6px 16px; }
+    .aod-btn:hover { background-image: none; background-color: #e9f2fb; }
+    .aod-field { border-radius: 9px; padding: 5px 10px; }
+    """
+    try:
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css)
+        Gtk.StyleContext.add_provider_for_screen(
+            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        screen._aod_theme_done = True
+    except Exception:
+        pass
+
+
+def _aod_beautify(widget, depth=0):
+    try:
+        import gi
+        gi.require_version('Gtk', '3.0')
+        from gi.repository import Gtk
+    except Exception:
+        return
+    if widget is None or depth > 24:
+        return
+    try:
+        context = widget.get_style_context()
+        if isinstance(widget, Gtk.Frame):
+            context.add_class('aod-card')
+            label_widget = widget.get_label_widget()
+            if label_widget is not None:
+                label_widget.get_style_context().add_class('aod-heading')
+        elif isinstance(widget, Gtk.Button):
+            context.add_class('aod-btn')
+        elif isinstance(widget, Gtk.Entry):
+            context.add_class('aod-field')
+    except Exception:
+        pass
+    try:
+        if isinstance(widget, Gtk.Container):
+            for child in widget.get_children():
+                _aod_beautify(child, depth + 1)
+    except Exception:
+        pass
+
+
+try:
+    _aod_generated_init = GeneratedActivity.__init__
+
+    def _aod_wrapped_init(self, *args, **kwargs):
+        _aod_generated_init(self, *args, **kwargs)
+        try:
+            _aod_install_theme()
+            _aod_beautify(self.get_canvas())
+        except Exception:
+            pass
+
+    GeneratedActivity.__init__ = _aod_wrapped_init
+except Exception:
+    pass
+'''
+
+
 def assemble_project(spec, plan, output_root, activity_source=None):
     os.makedirs(output_root, exist_ok=True)
     project_path = _new_project_path(output_root, spec.name)
@@ -628,8 +716,11 @@ def assemble_project(spec, plan, output_root, activity_source=None):
     # replacing it with a template would violate the repair-only contract.
     source = (render_activity_source(spec, plan)
               if activity_source is None else activity_source)
+    # Give every shipped activity a consistent, modern Sugar look without
+    # depending on how the model styled it.
+    activity_py = source.rstrip() + '\n\n' + _AOD_AUTOSTYLE
     files = {
-        'activity.py': source,
+        'activity.py': activity_py,
         'setup.py': _SETUP_SOURCE,
         'README.md': _render_readme(spec, plan),
         'LICENSE': license_info.get_text(),

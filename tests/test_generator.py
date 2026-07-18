@@ -19,6 +19,11 @@ from generation.validator import validate_project
 from generation.validator import validate_source
 
 
+def _has_display():
+    return bool(os.environ.get('DISPLAY') or
+                os.environ.get('WAYLAND_DISPLAY'))
+
+
 class TestAodGenerator(unittest.TestCase):
 
     def setUp(self):
@@ -97,6 +102,49 @@ class TestAodGenerator(unittest.TestCase):
                 'set_markup' in source or 'CssProvider' in source,
                 '%s: expected Pango markup or a CssProvider' % template)
             self.assertTrue(validate_source(source).valid, template)
+
+    def test_generated_activities_get_auto_polish(self):
+        # Every shipped activity.py carries the auto-style bootstrap that
+        # cards its own panels and rounds its controls, and still validates.
+        spec = ActivitySpec(
+            name='Polish Demo',
+            prompt='Create a quiz activity.',
+            category='logic_math',
+            license_id='MIT',
+            template='quiz',
+        )
+        result = create_prototype_activity(spec, self.output_root)
+        source = result.files['activity.py']
+        self.assertIn('_aod_wrapped_init', source)
+        self.assertIn('.aod-card', source)
+        self.assertIn('_aod_beautify', source)
+        self.assertTrue(validate_project(result.project_path).valid)
+
+    @unittest.skipUnless(_has_display(), 'needs a display server')
+    def test_auto_polish_tags_panels_and_controls(self):
+        # The beautify pass tags frames as cards and buttons/entries as
+        # styled controls, touching only the widget tree it is given.
+        import gi
+        gi.require_version('Gtk', '3.0')
+        from gi.repository import Gtk
+        from generation.generator import _AOD_AUTOSTYLE
+
+        namespace = {}
+        exec(compile(_AOD_AUTOSTYLE, 'autostyle.py', 'exec'), namespace)
+        box = Gtk.Box()
+        frame = Gtk.Frame(label='Score')
+        frame.add(Gtk.Label(label='0'))
+        box.pack_start(frame, True, True, 0)
+        button = Gtk.Button(label='Go')
+        box.pack_start(button, False, False, 0)
+        entry = Gtk.Entry()
+        box.pack_start(entry, False, False, 0)
+
+        namespace['_aod_beautify'](box)
+
+        self.assertTrue(frame.get_style_context().has_class('aod-card'))
+        self.assertTrue(button.get_style_context().has_class('aod-btn'))
+        self.assertTrue(entry.get_style_context().has_class('aod-field'))
 
     def test_chess_prompt_generates_playable_board_template(self):
         spec = ActivitySpec(
