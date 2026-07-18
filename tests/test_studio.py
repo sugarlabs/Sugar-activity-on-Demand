@@ -114,6 +114,11 @@ panel.cancel_generation()
 while Gtk.events_pending():
     Gtk.main_iteration_do(False)
 
+# Destroy the panel before the OffscreenWindow. GTK's OffscreenWindow
+# segfaults if it disposes this widget tree itself during its own
+# teardown; a real Gtk.Window (and the running app) tears the same panel
+# down cleanly, so this is a harness-only teardown detail, not an app bug.
+panel.destroy()
 window.destroy()
 print('OFFSCREEN-OK')
 '''
@@ -179,6 +184,8 @@ assert len(panel._home_ring_icons) == 1
 assert panel._home_ring.get_visible()
 assert not panel._home_empty_box.get_visible()
 
+# Destroy the panel first: see the note in _OFFSCREEN_SCRIPT above.
+panel.destroy()
 window.destroy()
 print('OFFSCREEN-HOME-OK')
 '''
