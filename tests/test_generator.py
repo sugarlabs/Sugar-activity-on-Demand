@@ -183,6 +183,36 @@ class TestAodGenerator(unittest.TestCase):
         self.assertTrue(button.get_style_context().has_class('aod-btn'))
         self.assertTrue(entry.get_style_context().has_class('aod-field'))
 
+    @unittest.skipUnless(_has_display(), 'needs a display server')
+    def test_auto_polish_caps_uncapped_wrapped_labels(self):
+        # A wrapped label with no width cap reports its full one-line text
+        # as natural width, ballooning side panels; the beautify pass caps
+        # it. Labels that already chose a width, or don't wrap, are left
+        # alone.
+        import gi
+        gi.require_version('Gtk', '3.0')
+        from gi.repository import Gtk
+        from generation.generator import _AOD_AUTOSTYLE
+
+        namespace = {}
+        exec(compile(_AOD_AUTOSTYLE, 'autostyle.py', 'exec'), namespace)
+        box = Gtk.Box()
+        ballooning = Gtk.Label(label='A very long help sentence ' * 8)
+        ballooning.set_line_wrap(True)
+        box.pack_start(ballooning, False, False, 0)
+        already_capped = Gtk.Label(label='capped')
+        already_capped.set_line_wrap(True)
+        already_capped.set_max_width_chars(20)
+        box.pack_start(already_capped, False, False, 0)
+        plain = Gtk.Label(label='no wrap')
+        box.pack_start(plain, False, False, 0)
+
+        namespace['_aod_beautify'](box)
+
+        self.assertEqual(34, ballooning.get_max_width_chars())
+        self.assertEqual(20, already_capped.get_max_width_chars())
+        self.assertEqual(-1, plain.get_max_width_chars())
+
     def test_shipped_source_hash_matches_ondisk_for_lineage(self):
         # Regression: the auto-style bootstrap is appended to the written
         # activity.py, so the plan's source_hash must be taken from the

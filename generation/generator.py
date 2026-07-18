@@ -678,6 +678,15 @@ def _aod_beautify(widget, depth=0):
             context.add_class('aod-btn')
         elif isinstance(widget, Gtk.Entry):
             context.add_class('aod-field')
+        elif isinstance(widget, Gtk.Label):
+            # A wrapped label with no width cap reports its full one-line
+            # text width as its natural width, ballooning side panels far
+            # past their requested size and starving the main work area.
+            # Cap it so the layout keeps its intended proportions.
+            if widget.get_line_wrap() and \
+                    widget.get_max_width_chars() <= 0 and \
+                    widget.get_width_chars() <= 0:
+                widget.set_max_width_chars(34)
     except Exception:
         pass
     try:
