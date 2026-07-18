@@ -125,11 +125,15 @@ class PreviewActivity(Gtk.Window):
     def __init__(self, handle=None, bundle_path=''):
         Gtk.Window.__init__(self)
         self._handle = handle
-        self._bundle_path = bundle_path
+        # The real instance is constructed via __new__ + this __init__
+        # (which the generated __init__ re-invokes), so per-render state
+        # comes from the module overrides rather than arguments.
+        self._bundle_path = bundle_path or _bundle_path_override[0]
         self._canvas = None
         self._toolbar_box = None
         self._stop_buttons = []
-        self.metadata = _PreviewMetadata('Preview')
+        self.metadata = _PreviewMetadata(
+            _preview_title_override[0] or 'Preview')
         self._stop_callback = None
         self.max_participants = 1
         self.shared_activity = None
@@ -316,14 +320,18 @@ def render_activity_preview(project_path, activity_name=''):
 def _try_exec_preview(patched_source, source_path, bundle_path,
                       activity_name):
     """Try to exec the patched source and return a preview tuple."""
-    preview = PreviewActivity(bundle_path=bundle_path)
-    preview.metadata = _PreviewMetadata(activity_name or 'Preview')
+    # The returned instance is built via __new__ below, so seed its
+    # bundle path and title through the module overrides that
+    # PreviewActivity.__init__ reads -- a stub instance passed through
+    # the namespace was never referenced by the generated code and only
+    # leaked an immortal GTK toplevel per attempt.
+    _bundle_path_override[0] = bundle_path
+    _preview_title_override[0] = activity_name or 'Preview'
 
     namespace = {
         '__name__': 'aod_preview_module',
         '__file__': source_path,
         'PreviewActivity': PreviewActivity,
-        '_preview_instance': preview,
         # Keep preview useful when otherwise valid generated code forgot the
         # standard gettext import.  The exported source is still validated
         # separately; this fallback only prevents the preview from blanking.
@@ -335,6 +343,12 @@ def _try_exec_preview(patched_source, source_path, bundle_path,
     except SyntaxError as error:
         return None, 'Syntax error in activity.py line %s: %s' % (
             error.lineno, error.msg), None
+    except SystemExit:
+        # SystemExit is a BaseException: uncaught it unwinds into GTK's
+        # dispatch and can terminate the whole studio process.
+        return None, (
+            'Activity called sys.exit() while loading; activities must '
+            'not exit the process.'), None
     except Exception as error:
         logging.exception('Preview exec failed')
         return None, 'Could not load activity: %s' % error, None
@@ -357,6 +371,11 @@ def _try_exec_preview(patched_source, source_path, bundle_path,
 
     try:
         instance.__init__(handle=None)
+    except SystemExit:
+        _dispose_preview_instance(instance)
+        return None, (
+            'Activity called sys.exit() in __init__; activities must '
+            'not exit the process.'), None
     except Exception as error:
         logging.exception('Preview __init__ failed')
         if not _has_salvageable_canvas(instance):
@@ -367,6 +386,11 @@ def _try_exec_preview(patched_source, source_path, bundle_path,
             error)
 
     if not isinstance(instance, PreviewActivity):
+        if isinstance(instance, Gtk.Widget):
+            try:
+                instance.destroy()
+            except Exception:
+                pass
         return None, 'Activity did not inherit from PreviewActivity', None
 
     instance.__dict__['_preview_construction_done'] = True
@@ -383,6 +407,7 @@ def _try_exec_preview(patched_source, source_path, bundle_path,
         toolbar = None
 
     if canvas is None or isinstance(canvas, _NoOpProxy):
+        _dispose_preview_instance(instance)
         return None, 'Activity did not call set_canvas()', None
 
     return instance, canvas, toolbar
@@ -552,6 +577,7 @@ def _set_adjustment_bounds(adjustment, lower, upper):
 
 
 _bundle_path_override = ['']
+_preview_title_override = ['']
 
 
 def _install_bundle_path_helper(bundle_path):
