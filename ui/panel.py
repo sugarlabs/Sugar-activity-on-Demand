@@ -1501,33 +1501,147 @@ class CreateAIActivityPanel(Gtk.EventBox):
             self._add_chat_bubble(text, from_user=True, scroll=scroll)
             return
 
-        # An AI reply arrives as its own little series of bubbles — one
-        # per paragraph — each drifting in and streaming after the one
-        # before it settles. Reads calmer than a single wall of text.
+        self._post_ai_reply(
+            self._chat_messages_box, self.__scroll_chat_to_bottom, text,
+            max_chars=40, typing=scroll)
+
+    def _post_ai_reply(self, box, scroll_cb, text, max_chars=40, typing=True):
+        # An AI reply lands as its own little series of bubbles — one per
+        # paragraph — each drifting in and streaming after the one before it
+        # settles. When it is a live reply a short typing indicator beats
+        # first, so it reads like someone composing rather than a wall of
+        # text appearing at once.
         paragraphs = [p.strip() for p in re.split(r'\n\s*\n', text)
                       if p.strip()]
         if not paragraphs:
             return
-        self._stream_ai_paragraphs(paragraphs, 0, scroll)
 
-    def _stream_ai_paragraphs(self, paragraphs, index, scroll):
+        def begin():
+            self._stream_paragraphs(box, scroll_cb, paragraphs, 0, max_chars)
+
+        if typing:
+            typing_row = self._show_typing_bubble(box, scroll_cb)
+
+            def after_typing():
+                self._remove_typing_bubble(typing_row)
+                begin()
+                return False
+            GLib.timeout_add(620, after_typing)
+        else:
+            begin()
+
+    def _stream_paragraphs(self, box, scroll_cb, paragraphs, index, max_chars):
         if index >= len(paragraphs):
             return
+        last = index == len(paragraphs) - 1
 
         def on_done():
             # A short, gentle beat before the next block appears.
             def next_block():
-                self._stream_ai_paragraphs(paragraphs, index + 1, scroll)
+                self._stream_paragraphs(
+                    box, scroll_cb, paragraphs, index + 1, max_chars)
                 return False
             GLib.timeout_add(200, next_block)
 
-        last = index == len(paragraphs) - 1
         self._add_chat_bubble(
-            paragraphs[index], from_user=False, scroll=scroll,
-            stream=True, on_done=None if last else on_done)
+            paragraphs[index], from_user=False, scroll=True,
+            stream=True, on_done=None if last else on_done,
+            box=box, scroll_cb=scroll_cb, max_chars=max_chars)
+
+    def _create_typing_dots(self):
+        """A small AI bubble's worth of three dots that pulse in sequence."""
+        area = Gtk.DrawingArea()
+        area.set_size_request(style.zoom(38), style.zoom(16))
+        area.connect('draw', self._draw_typing_dots)
+        area._typing_phase = 0.0
+
+        def tick(widget, frame_clock):
+            widget._typing_phase = frame_clock.get_frame_time() / 1.0e6
+            widget.queue_draw()
+            return GLib.SOURCE_CONTINUE
+
+        area._typing_tick_id = area.add_tick_callback(tick)
+        return area
+
+    def _draw_typing_dots(self, area, cr):
+        width = area.get_allocated_width()
+        height = area.get_allocated_height()
+        phase = getattr(area, '_typing_phase', 0.0)
+        count = 3
+        radius = style.zoom(3)
+        gap = style.zoom(9)
+        span = (count - 1) * gap
+        x0 = (width - span) / 2.0
+        cy = height / 2.0
+        for i in range(count):
+            wave = math.sin(phase * 4.2 - i * 0.7)
+            alpha = 0.30 + 0.50 * (0.5 + 0.5 * wave)
+            lift = style.zoom(2) * (0.5 + 0.5 * wave)
+            cr.set_source_rgba(0.42, 0.36, 0.78, alpha)
+            cr.arc(x0 + i * gap, cy - lift, radius, 0, 2 * math.pi)
+            cr.fill()
+        return False
+
+    def _show_typing_bubble(self, box, scroll_cb):
+        """Add a pulsing 'typing…' bubble; returns the row to remove later."""
+        if box is None:
+            return None
+        row = Gtk.HBox()
+        bubble = Gtk.EventBox()
+        bubble.get_style_context().add_class('create-ai-chat-bubble')
+        bubble.get_style_context().add_class('create-ai-chat-bubble-ai')
+        bubble.get_style_context().add_class('create-ai-chat-typing')
+        dots = self._create_typing_dots()
+        dots.set_margin_top(style.zoom(8))
+        dots.set_margin_bottom(style.zoom(8))
+        dots.set_margin_start(style.zoom(12))
+        dots.set_margin_end(style.zoom(12))
+        bubble.add(dots)
+        dots.show()
+        row._typing_dots = dots
+
+        spacer = Gtk.Label()
+        row.pack_start(bubble, False, False, 0)
+        row.pack_start(spacer, True, True, 0)
+        box.pack_start(row, False, False, 0)
+        spacer.show()
+        bubble.show()
+        row.show()
+        self._fade_in_widget(row)
+        if scroll_cb is not None:
+            GObject.idle_add(scroll_cb)
+        return row
+
+    def _remove_typing_bubble(self, row):
+        if row is None:
+            return
+        # Cancel the dots' frame-clock callback before the widget goes away
+        # so it never fires on a destroyed widget.
+        dots = getattr(row, '_typing_dots', None)
+        if dots is not None:
+            tick_id = getattr(dots, '_typing_tick_id', 0)
+            if tick_id:
+                try:
+                    dots.remove_tick_callback(tick_id)
+                except Exception:
+                    pass
+        try:
+            row.destroy()
+        except Exception:
+            pass
 
     def _add_chat_bubble(self, text, from_user=False, scroll=True,
-                         stream=False, on_done=None):
+                         stream=False, on_done=None, box=None,
+                         scroll_cb=None, max_chars=40):
+        if box is None:
+            box = self._chat_messages_box
+        if box is None:
+            if on_done is not None:
+                on_done()
+            return
+        if scroll_cb is None:
+            scroll_cb = self.__scroll_chat_to_bottom
+
         row = Gtk.HBox()
         bubble = Gtk.EventBox()
         bubble.get_style_context().add_class('create-ai-chat-bubble')
@@ -1539,7 +1653,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         label = Gtk.Label()
         label.get_style_context().add_class('create-ai-chat-text')
         label.set_line_wrap(True)
-        label.set_max_width_chars(40)
+        label.set_max_width_chars(max_chars)
         label.set_xalign(0)
         label.set_margin_top(style.zoom(6))
         label.set_margin_bottom(style.zoom(6))
@@ -1556,7 +1670,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
             row.pack_start(bubble, False, False, 0)
             row.pack_start(spacer, True, True, 0)
 
-        self._chat_messages_box.pack_start(row, False, False, 0)
+        box.pack_start(row, False, False, 0)
         spacer.show()
         bubble.show()
         row.show()
@@ -1565,7 +1679,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         # reveal their text in gentle word-chunks as it lands.
         self._fade_in_widget(row)
         if stream:
-            self._stream_chat_text(label, text, scroll=scroll,
+            self._stream_chat_text(label, text, scroll_cb=scroll_cb,
                                    on_done=on_done)
         else:
             label.set_text(text)
@@ -1573,7 +1687,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 on_done()
 
         if scroll:
-            GObject.idle_add(self.__scroll_chat_to_bottom)
+            GObject.idle_add(scroll_cb)
 
     def _fade_in_widget(self, widget, duration=340000.0, rise=None):
         # A soft entrance: the bubble drifts up a few pixels while it
@@ -1600,10 +1714,13 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
         widget.add_tick_callback(tick)
 
-    def _stream_chat_text(self, label, text, scroll=True, on_done=None):
+    def _stream_chat_text(self, label, text, scroll=True, on_done=None,
+                          scroll_cb=None):
         # Reveal the text a few characters at a time, always snapping to
         # the next word boundary so words never appear half-formed. The
         # original string is sliced so newlines and spacing stay intact.
+        if scroll_cb is None and scroll:
+            scroll_cb = self.__scroll_chat_to_bottom
         total = len(text)
         if total == 0:
             if on_done is not None:
@@ -1617,8 +1734,8 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 n += 1
             state['n'] = n
             label.set_text(text[:n])
-            if scroll:
-                self.__scroll_chat_to_bottom()
+            if scroll_cb is not None:
+                scroll_cb()
             if n >= total:
                 label.set_text(text)
                 if on_done is not None:
@@ -3609,44 +3726,22 @@ class CreateAIActivityPanel(Gtk.EventBox):
         return card
 
     def _append_sidebar_message(self, text, from_user=False, scroll=True):
+        # The sidebar conversation now uses the same living treatment as the
+        # main chat: bubbles drift in, the AI's reply beats a typing
+        # indicator and then streams in word-chunks.
         if self._sidebar_messages_box is None:
             return
-
-        row = Gtk.HBox()
-        bubble = Gtk.EventBox()
-        bubble.get_style_context().add_class('create-ai-chat-bubble')
         if from_user:
-            bubble.get_style_context().add_class('create-ai-chat-bubble-user')
-        else:
-            bubble.get_style_context().add_class('create-ai-chat-bubble-ai')
-
-        label = Gtk.Label(text)
-        label.get_style_context().add_class('create-ai-chat-text')
-        label.set_line_wrap(True)
-        label.set_max_width_chars(32)
-        label.set_xalign(0)
-        label.set_margin_top(style.zoom(5))
-        label.set_margin_bottom(style.zoom(5))
-        label.set_margin_start(style.zoom(8))
-        label.set_margin_end(style.zoom(8))
-        bubble.add(label)
-        label.show()
-
-        spacer = Gtk.Label()
-        if from_user:
-            row.pack_start(spacer, True, True, 0)
-            row.pack_start(bubble, False, False, 0)
-        else:
-            row.pack_start(bubble, False, False, 0)
-            row.pack_start(spacer, True, True, 0)
-
-        self._sidebar_messages_box.pack_start(row, False, False, 0)
-        spacer.show()
-        bubble.show()
-        row.show()
-
-        if scroll:
-            GObject.idle_add(self.__scroll_sidebar_chat_to_bottom)
+            self._add_chat_bubble(
+                text, from_user=True, scroll=scroll,
+                box=self._sidebar_messages_box,
+                scroll_cb=self.__scroll_sidebar_chat_to_bottom,
+                max_chars=32)
+            return
+        self._post_ai_reply(
+            self._sidebar_messages_box,
+            self.__scroll_sidebar_chat_to_bottom, text,
+            max_chars=32, typing=scroll)
 
     def _append_sidebar_status(self, text, scroll=True):
         if self._sidebar_messages_box is None:
@@ -3662,6 +3757,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._sidebar_messages_box.pack_start(row, False, False, 0)
         label.show()
         row.show()
+        self._fade_in_widget(row)
 
         if scroll:
             GObject.idle_add(self.__scroll_sidebar_chat_to_bottom)
