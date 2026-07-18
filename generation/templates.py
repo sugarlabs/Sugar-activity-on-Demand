@@ -65,7 +65,12 @@ def _render_shell(spec, plan, body):
                 # learner's display.
                 try:
                     screen = Gdk.Screen.get_default()
-                    if screen is None:
+                    # The stylesheet is identical for every shell-rendered
+                    # activity, and the studio previews activities
+                    # in-process -- guard so repeated previews don't stack
+                    # screen-wide providers forever.
+                    if screen is None or getattr(
+                            screen, '_aod_tpl_styles_done', False):
                         return
                     css = (
                         '.aod-title {{ font-weight: bold;'
@@ -84,6 +89,7 @@ def _render_shell(spec, plan, body):
                     Gtk.StyleContext.add_provider_for_screen(
                         screen, provider,
                         Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+                    screen._aod_tpl_styles_done = True
                 except Exception:
                     pass
 
@@ -174,9 +180,17 @@ def _render_canvas(spec, plan):
         def read_file(self, file_path):
             try:
                 with open(file_path, encoding='utf-8') as source:
-                    self._points = json.load(source).get('points', [])
+                    points = json.load(source).get('points', [])
             except (OSError, ValueError):
-                self._points = []
+                points = []
+            # Keep only numeric pairs: state written by another version of
+            # this activity must never crash the draw handler on resume.
+            self._points = [
+                [float(p[0]), float(p[1])]
+                for p in points
+                if isinstance(p, (list, tuple)) and len(p) == 2
+                and all(isinstance(v, (int, float)) for v in p)
+            ]
             if hasattr(self, '_drawing'):
                 self._drawing.queue_draw()
         '''
@@ -225,6 +239,8 @@ def _render_grid(spec, plan):
                     values = json.load(source).get('grid', [])
             except (OSError, ValueError):
                 values = []
+            if not isinstance(values, list):
+                values = []
             for index, value in enumerate(values[:16]):
                 self._grid_state[index] = bool(value)
                 if hasattr(self, '_grid_buttons'):
@@ -243,6 +259,7 @@ def _render_chess(spec, plan):
             self._captured = {'w': [], 'b': []}
             self._move_log_view = None
             self._buttons = []
+            self._status_is_default = True
             self._board = self._starting_board()
 
             canvas = self._standard_canvas()
@@ -511,9 +528,14 @@ def _render_chess(spec, plan):
                         '%s %s' % (self._square_name(row, col),
                                    self._piece_name(piece) if piece else
                                    'empty'))
-            if not self._move_log:
+            # Only show the generic prompt while no informative status has
+            # been set; keying this off the move log silenced selection and
+            # move feedback whenever the log was empty (always, in
+            # clean-board mode).
+            if self._status_is_default:
                 self._set_status('%s to move. Select a piece.' %
                                  self._turn_name())
+                self._status_is_default = True
             self._update_captured()
             self._update_move_log()
 
@@ -556,6 +578,7 @@ def _render_chess(spec, plan):
 
         def _set_status(self, text):
             self._status.set_text(text)
+            self._status_is_default = False
 
         def _turn_name(self):
             return 'White' if self._turn == 'w' else 'Black'
@@ -603,13 +626,24 @@ def _render_chess(spec, plan):
             except (OSError, ValueError):
                 state = {}
             board = state.get('board')
-            if isinstance(board, list) and len(board) == 8:
+            # Accept only a full 8x8 grid of known piece codes; anything
+            # else (state saved by a different version of this activity)
+            # falls back to the starting position instead of crashing the
+            # board refresh.
+            known = set(self._piece_labels()) | {''}
+            if (isinstance(board, list) and len(board) == 8 and all(
+                    isinstance(row, list) and len(row) == 8 and all(
+                        isinstance(piece, str) and piece in known
+                        for piece in row)
+                    for row in board)):
                 self._board = board
             self._turn = state.get('turn', 'w')
             if self._turn not in ('w', 'b'):
                 self._turn = 'w'
             if self._show_move_log:
                 move_log = state.get('move_log', [])
+                if not isinstance(move_log, list):
+                    move_log = []
                 self._move_log = [
                     str(move) for move in move_log
                     if isinstance(move, str)
@@ -618,13 +652,17 @@ def _render_chess(spec, plan):
                 self._move_log = []
             captured = state.get('captured')
             if isinstance(captured, dict):
+                white = captured.get('w')
+                black = captured.get('b')
                 self._captured = {
                     'w': [
-                        str(piece) for piece in captured.get('w', [])
+                        str(piece) for piece in
+                        (white if isinstance(white, list) else [])
                         if isinstance(piece, str)
                     ][:32],
                     'b': [
-                        str(piece) for piece in captured.get('b', [])
+                        str(piece) for piece in
+                        (black if isinstance(black, list) else [])
                         if isinstance(piece, str)
                     ][:32],
                 }
@@ -987,7 +1025,8 @@ def _render_carrom(spec, plan):
                 if isinstance(item, str)
             ][:80]
             aim = state.get('aim_point')
-            if isinstance(aim, list) and len(aim) == 2:
+            if isinstance(aim, list) and len(aim) == 2 and all(
+                    isinstance(value, (int, float)) for value in aim):
                 self._aim_point = [
                     max(0.0, min(1.0, float(aim[0]))),
                     max(0.0, min(1.0, float(aim[1]))),
@@ -1138,9 +1177,15 @@ def _render_quiz(spec, plan):
                     state = json.load(source)
             except (OSError, ValueError):
                 state = {}
-            self._score = int(state.get('score', 0))
-            self._question_index = int(
-                state.get('question_index', 0)) % len(self._questions)
+            try:
+                self._score = int(state.get('score', 0))
+            except (TypeError, ValueError):
+                self._score = 0
+            try:
+                self._question_index = int(
+                    state.get('question_index', 0)) % len(self._questions)
+            except (TypeError, ValueError):
+                self._question_index = 0
             if hasattr(self, '_question_label'):
                 self._show_question()
         '''
@@ -1266,7 +1311,10 @@ def _render_counter_utility():
                     state = json.load(source)
             except (OSError, ValueError):
                 state = {}
-            self._count = int(state.get('count', 0))
+            try:
+                self._count = int(state.get('count', 0))
+            except (TypeError, ValueError):
+                self._count = 0
             if hasattr(self, '_counter_label'):
                 self._update_counter()
         '''
@@ -1349,7 +1397,11 @@ def _render_timer_utility():
                     state = json.load(source)
             except (OSError, ValueError):
                 state = {}
-            self._elapsed_seconds = int(state.get('elapsed_seconds', 0))
+            try:
+                self._elapsed_seconds = int(
+                    state.get('elapsed_seconds', 0))
+            except (TypeError, ValueError):
+                self._elapsed_seconds = 0
             if hasattr(self, '_timer_label'):
                 self._update_timer()
         '''

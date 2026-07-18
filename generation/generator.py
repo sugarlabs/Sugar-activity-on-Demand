@@ -868,7 +868,9 @@ def _activity_tags(spec, plan):
                 tags.append(tag)
         if len(tags) >= 6:
             break
-    return ' '.join(tags)
+    # Sugar parses the tags field on ';' (ActivityBundle._parse_info splits
+    # on semicolons); a space join collapses everything into one bogus tag.
+    return ';'.join(tags)
 
 
 def _render_activity_info(spec, plan):

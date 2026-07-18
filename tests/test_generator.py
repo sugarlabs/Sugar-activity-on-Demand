@@ -457,6 +457,9 @@ class TestActivityInfoMetadata(unittest.TestCase):
         ][0]
         self.assertIn('Education', tags_line)
         self.assertIn('Games', tags_line)
+        # Sugar splits the tags field on ';' — a space join would collapse
+        # everything into one bogus tag.
+        self.assertIn('Education;', tags_line)
 
     def test_normalize_preserves_explicit_version(self):
         from generation.generator import build_plan
