@@ -768,3 +768,47 @@ def _simple_activity_source():
         'class GeneratedActivity(activity.Activity):\n'
         '    pass\n'
     )
+
+
+class TestTruncationDetection(unittest.TestCase):
+    """A capped response must fail loudly, not ship a truncated source."""
+
+    def test_chat_message_with_text_but_length_reason_raises(self):
+        from llm.providers import _chat_completion_message_text
+
+        response = {'choices': [{
+            'finish_reason': 'length',
+            'message': {'content': 'def half_an_activity('},
+        }]}
+        with self.assertRaises(ProviderError) as raised:
+            _chat_completion_message_text(response, 'OpenAI')
+        self.assertIn('token budget exhausted', str(raised.exception))
+
+    def test_chat_message_with_stop_reason_returns_text(self):
+        from llm.providers import _chat_completion_message_text
+
+        response = {'choices': [{
+            'finish_reason': 'stop',
+            'message': {'content': 'complete source'},
+        }]}
+        self.assertEqual(
+            'complete source',
+            _chat_completion_message_text(response, 'OpenAI'))
+
+    def test_responses_text_incomplete_status_raises(self):
+        from llm.providers import _responses_text
+
+        response = {
+            'status': 'incomplete',
+            'incomplete_details': {'reason': 'max_output_tokens'},
+            'output': [{'text': 'partial'}],
+        }
+        with self.assertRaises(ProviderError) as raised:
+            _responses_text(response)
+        self.assertIn('max_output_tokens', str(raised.exception))
+
+    def test_responses_text_completed_returns_text(self):
+        from llm.providers import _responses_text
+
+        response = {'status': 'completed', 'output': [{'text': 'full'}]}
+        self.assertEqual('full', _responses_text(response))

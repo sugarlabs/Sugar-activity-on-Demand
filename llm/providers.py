@@ -313,6 +313,7 @@ class GeminiProvider(LLMProvider):
             method='POST',
         )
         accumulated = ''
+        finish_reason = ''
         try:
             with _urlopen_with_retry(
                     request, timeout, 'Gemini') as response:
@@ -336,9 +337,13 @@ class GeminiProvider(LLMProvider):
                             continue
                         try:
                             candidate = event['candidates'][0]
+                        except (KeyError, IndexError):
+                            continue
+                        reason = candidate.get('finishReason')
+                        if reason:
+                            finish_reason = reason
+                        try:
                             parts = candidate['content']['parts']
-                            # Gemini sends the full accumulated text in each
-                            # chunk, not just the delta — use it directly.
                             text = ''.join(
                                 part.get('text', '') for part in parts
                             )
@@ -346,7 +351,16 @@ class GeminiProvider(LLMProvider):
                             continue
                         if not text:
                             continue
-                        accumulated = text
+                        # The streaming API sends incremental deltas per
+                        # chunk (SDKs concatenate chunk.text), so append.
+                        # Guard against a cumulative-payload variant: a
+                        # chunk that already extends everything received
+                        # replaces instead of duplicating it.
+                        if text.startswith(accumulated) and \
+                                len(text) > len(accumulated):
+                            accumulated = text
+                        else:
+                            accumulated += text
                         if stream_callback is not None:
                             try:
                                 stream_callback(accumulated)
@@ -368,6 +382,11 @@ class GeminiProvider(LLMProvider):
 
         if not accumulated:
             raise ProviderError('Gemini streaming returned an empty response.')
+        if finish_reason == 'MAX_TOKENS':
+            raise ProviderError(
+                'Gemini stopped early: output token budget exhausted '
+                '(finishReason MAX_TOKENS); the returned source is '
+                'truncated.')
         return accumulated
 
 
@@ -460,6 +479,7 @@ class OpenAIProvider(LLMProvider):
             method='POST',
         )
         parts = []
+        finish_reason = ''
         try:
             with _urlopen_with_retry(
                     request, timeout, self.label) as response:
@@ -476,9 +496,13 @@ class OpenAIProvider(LLMProvider):
                     except json.JSONDecodeError:
                         continue
                     try:
-                        delta = event['choices'][0].get('delta') or {}
+                        choice = event['choices'][0]
                     except (KeyError, IndexError, TypeError):
                         continue
+                    reason = choice.get('finish_reason')
+                    if reason:
+                        finish_reason = reason
+                    delta = choice.get('delta') or {}
                     content = delta.get('content')
                     if not isinstance(content, str) or not content:
                         continue
@@ -505,6 +529,15 @@ class OpenAIProvider(LLMProvider):
                 '%s streamed an empty code response. Reasoning models can '
                 'spend the whole output budget before emitting code; try '
                 'again, use a smaller prompt, or switch models.'
+                % self._request_label()
+            )
+        if finish_reason == 'length':
+            # A silently truncated activity.py surfaces later as a mystery
+            # syntax error; name the real cause so the job (and the model
+            # during repair) sees it.
+            raise ProviderError(
+                '%s stopped early: output token budget exhausted '
+                '(finish_reason length); the streamed source is truncated.'
                 % self._request_label()
             )
         return text
@@ -906,6 +939,10 @@ class ClaudeProvider(LLMProvider):
             )
         except (KeyError, TypeError):
             raise ProviderError('Claude response did not contain a result.')
+        if response_data.get('stop_reason') == 'max_tokens':
+            raise ProviderError(
+                'Claude stopped early: output token budget exhausted '
+                '(stop_reason max_tokens); the returned text is truncated.')
         return text
 
 
@@ -993,6 +1030,10 @@ class OllamaProvider(LLMProvider):
             text = response_data['response']
         except (KeyError, TypeError):
             raise ProviderError('Ollama response did not contain a result.')
+        if response_data.get('done_reason') == 'length':
+            raise ProviderError(
+                'Ollama stopped early: output token budget exhausted '
+                '(done_reason length); the returned text is truncated.')
         return text
 
 
@@ -1031,7 +1072,13 @@ def _responses_text(response_data):
                         blocks.append(text)
 
     if blocks:
-        return ''.join(blocks)
+        text = ''.join(blocks)
+        if response_data.get('status') == 'incomplete':
+            details = response_data.get('incomplete_details') or {}
+            raise ProviderError(
+                'FreeModel stopped early (%s); the returned text is '
+                'truncated.' % (details.get('reason') or 'incomplete'))
+        return text
 
     raise ProviderError('FreeModel response did not contain a result.')
 
@@ -1052,6 +1099,18 @@ def _chat_completion_message_text(response_data, label):
 
     text = _content_to_text(message.get('content')).strip()
     if text:
+        # Even with text present, finish_reason=length means the tail of
+        # the source was cut off; surface the truncation instead of
+        # letting it fail later as a mystery syntax error.
+        truncated_reason = (
+            choice.get('finish_reason') or choice.get('finishReason') or ''
+        )
+        if str(truncated_reason) == 'length':
+            raise ProviderError(
+                '%s stopped early: output token budget exhausted '
+                '(finish_reason length); the returned source is truncated.'
+                % label
+            )
         return text
 
     refusal = (
