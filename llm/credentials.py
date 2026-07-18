@@ -86,18 +86,26 @@ class CredentialStoreError(Exception):
     pass
 
 
+def known_provider_names():
+    """Provider names the credential store can persist settings for."""
+    return tuple(_PROVIDER_VARIABLES)
+
+
 class AODCredentialStore:
     """Store provider settings without exposing keys to generated projects."""
 
-    def __init__(self, root_path=None, secret_backend=None):
+    def __init__(self, root_path=None, secret_backend='auto'):
         self._root_path = root_path or env.get_profile_path('aod')
         self._path = os.path.join(self._root_path, 'providers.env')
-        if secret_backend is False:
+        # 'auto' (the default) uses the system keyring when libsecret is
+        # available and silently degrades to the profile file otherwise;
+        # False opts out explicitly.  The old default of None disabled
+        # the keyring for every production caller, leaving the entire
+        # libsecret path dead code and every key in plaintext.
+        if secret_backend is False or secret_backend is None:
             self._secret_backend = None
         elif secret_backend == 'auto':
             self._secret_backend = _create_secret_backend()
-        elif secret_backend is None:
-            self._secret_backend = None
         else:
             self._secret_backend = secret_backend
 
@@ -148,12 +156,16 @@ class AODCredentialStore:
         variables = self._variables_for(provider_name)
         values = self._read_values()
         storage = values.get(variables.get('storage', ''), '')
-        has_key = bool(
-            storage == 'keyring' or values.get(
-                variables.get('key', ''),
-                '',
-            )
-        )
+        # Status must agree with load_provider: 'keyring' storage only
+        # counts as a key when the backend can actually produce one, else
+        # the UI claims a key exists while generation silently gets none.
+        has_key = bool(values.get(variables.get('key', ''), ''))
+        if not has_key and storage == 'keyring' \
+                and self._secret_backend is not None:
+            try:
+                has_key = bool(self._secret_backend.lookup(provider_name))
+            except Exception:
+                has_key = False
         return {
             'has_api_key': has_key,
             'storage': storage,

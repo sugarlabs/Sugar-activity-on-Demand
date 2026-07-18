@@ -11,6 +11,7 @@ import time
 
 from llm.credentials import AODCredentialStore
 from llm.credentials import CredentialStoreError
+from llm.credentials import known_provider_names
 from generation.generator import restore_generation_result
 from service.jobs import AODJob
 from service.jobs import AODJobStore
@@ -221,12 +222,13 @@ class AODService:
 
         for status in statuses:
             provider = overrides.get(status['name'])
+            # Derived from the store's own registry so the two lists can
+            # never drift again: the old hardcoded tuple omitted
+            # 'openrouter', so a saved OpenRouter key (the default
+            # provider!) never showed as configured in the picker.
             credentials = self._credential_store.provider_status(
                 status['name']
-            ) if status['name'] in (
-                'gemini', 'openai', 'deepseek', 'qwen', 'moonshot',
-                'opencode', 'opencode-go', 'freemodel', 'claude', 'ollama'
-            ) else {}
+            ) if status['name'] in known_provider_names() else {}
             ollama_configured = status['name'] == 'ollama' and any((
                 credentials.get('model'),
                 credentials.get('endpoint'),
