@@ -857,7 +857,7 @@ class ClaudeProvider(LLMProvider):
         self._api_key = api_key or os.environ.get('ANTHROPIC_API_KEY', '')
         self.model = model or os.environ.get(
             'AOD_CLAUDE_MODEL',
-            'claude-3-5-haiku-latest',
+            'claude-sonnet-4-6',
         )
         self._endpoint = endpoint or os.environ.get(
             'AOD_CLAUDE_ENDPOINT',
@@ -911,7 +911,6 @@ class ClaudeProvider(LLMProvider):
         payload = {
             'model': self.model,
             'max_tokens': max_tokens,
-            'temperature': 0.3,
             'system': system_prompt,
             'messages': [
                 {'role': 'user', 'content': user_prompt},
@@ -1440,7 +1439,7 @@ def _provider_model(name):
         'opencode': ('AOD_OPENCODE_MODEL', 'claude-sonnet-4-6'),
         'opencode-go': ('AOD_OPENCODE_GO_MODEL', 'kimi-k2.7-code'),
         'freemodel': ('AOD_FREEMODEL_MODEL', 'gpt-5.5'),
-        'claude': ('AOD_CLAUDE_MODEL', 'claude-3-5-haiku-latest'),
+        'claude': ('AOD_CLAUDE_MODEL', 'claude-sonnet-4-6'),
         'ollama': ('AOD_OLLAMA_MODEL', 'llama3.1'),
     }
     env_name, default = model_env[name]
