@@ -315,6 +315,32 @@ class AODService:
             return saved_provider
         return get_default_provider_name()
 
+    def resolve_provider(self, provider_name='default'):
+        """Return a ready provider for interactive use, or None.
+
+        Mirrors how generation resolves a provider so callers (e.g. the
+        guided questions/plan flow) see the same one that will build the
+        activity: expand 'default', then prefer a runtime override, then
+        a saved API key from the credential store, then environment
+        configuration.  Returns None for the local template (no model).
+        """
+        name = normalize_provider_name(provider_name)
+        if name == 'default':
+            name = normalize_provider_name(self.preferred_provider_name())
+        if name in ('local-template', 'local'):
+            return None
+        with self._lock:
+            override = self._provider_overrides.get(name)
+        if override is not None:
+            return override
+        saved = self._load_saved_provider(name)
+        if saved is not None:
+            return saved
+        try:
+            return create_provider(name)
+        except Exception:
+            return None
+
     def shutdown(self, wait=True):
         self._queue.shutdown(wait=wait)
 
