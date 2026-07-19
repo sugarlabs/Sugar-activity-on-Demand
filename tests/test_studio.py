@@ -298,6 +298,281 @@ print('OFFSCREEN-ASKBAR-OK')
 '''
 
 
+_OFFSCREEN_GUIDED_SCRIPT = '''
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk
+
+from llm.clarify import format_answers
+from ui.panel import CreateAIActivityPanel
+
+
+def pump():
+    while Gtk.events_pending():
+        Gtk.main_iteration_do(False)
+
+
+window = Gtk.OffscreenWindow()
+panel = CreateAIActivityPanel()
+window.add(panel)
+window.show_all()
+panel.reset_view()
+pump()
+
+# The guided page lives in the studio preview column and its scaffolding
+# is visible (regression: an all-hidden child produced a blank screen).
+assert panel._studio_mode_stack.get_child_by_name('guided') is not None
+assert panel._guided_view.get_visible()
+
+questions = [
+    {'id': 'mode', 'label': 'Who plays?', 'type': 'single',
+     'options': ['Human vs AI', '2-player']},
+    {'id': 'features', 'label': 'Which features?', 'type': 'multi',
+     'options': ['Undo', 'Clock']},
+    {'id': 'else', 'label': 'Anything else?', 'type': 'text'},
+]
+panel._guided_state = {
+    'prompt': 'chess', 'spec': None, 'provider': None,
+    'questions': questions, 'answers': {}, 'answers_text': '',
+    'answer_widgets': {}, 'plan_text': '', 'discussion': [],
+}
+panel._show_questions_page(questions)
+pump()
+children = panel._guided_body.get_children()
+assert children, 'questions page has no widgets'
+assert any(w.get_visible() for w in children), 'questions widgets hidden'
+assert set(panel._guided_state['answer_widgets']) == {
+    'mode', 'features', 'else'}
+
+panel._collect_guided_answers()
+assert isinstance(panel._guided_state['answers'], dict)
+
+panel._guided_state['answers'] = {'mode': 'Human vs AI'}
+
+# Continue goes straight to building — there is no separate plan-review
+# step. The answers are folded into the prompt for the normal submit path.
+captured = {}
+panel._submit_generation_from_prompt = (
+    lambda prompt, chat_prompt=None: captured.update(
+        prompt=prompt, chat_prompt=chat_prompt))
+panel._commit_guided_and_build()
+assert 'chess' in captured['prompt'], captured
+assert 'Confirmed requirements' in captured['prompt'], captured
+assert 'Human vs AI' in captured['prompt'], captured
+assert captured['chat_prompt'] == 'chess'
+assert panel._guided_state is None
+
+panel.destroy()
+window.destroy()
+print('OFFSCREEN-GUIDED-OK')
+'''
+
+
+_OFFSCREEN_GUIDED_TRIGGER_SCRIPT = '''
+import time
+
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk
+
+import llm.clarify as clarify
+from ui.panel import CreateAIActivityPanel
+
+
+def pump():
+    while Gtk.events_pending():
+        Gtk.main_iteration_do(False)
+
+
+def all_label_text(widget):
+    texts = []
+    getter = getattr(widget, 'get_children', None)
+    if getter is None:
+        return texts
+    for child in getter():
+        if isinstance(child, Gtk.Label):
+            texts.append(child.get_text())
+        texts.extend(all_label_text(child))
+    return texts
+
+
+class _FakeProvider:
+    name = 'openrouter'
+    model = 'test'
+
+
+QUESTIONS = [
+    {'id': 'mode', 'label': 'Who plays?', 'type': 'single',
+     'options': ['A', 'B']},
+    {'id': 'extra', 'label': 'Anything else?', 'type': 'text'},
+]
+clarify.generate_questions = lambda provider, spec, timeout=90: QUESTIONS
+
+window = Gtk.OffscreenWindow()
+window.set_default_size(1200, 900)
+panel = CreateAIActivityPanel()
+window.add(panel)
+window.show_all()
+panel.reset_view()
+pump()
+
+# Sending an idea must open the questionnaire in the studio (regression:
+# it fell straight through to the blank preview when the guided flow or
+# provider resolution failed).
+panel._resolve_active_provider = lambda: _FakeProvider()
+panel._begin_guided_generation('chess')
+
+ok = False
+for _ in range(400):
+    pump()
+    if (panel._stack.get_visible_child_name() == 'studio' and
+            panel._studio_mode_stack.get_visible_child_name() == 'guided'):
+        labels = all_label_text(panel._guided_body)
+        if any('Who plays' in text for text in labels):
+            ok = True
+            break
+    time.sleep(0.01)
+
+assert ok, 'guided questions did not render after Send'
+
+# While the questionnaire is open the studio tabs are locked so the user
+# cannot navigate away from the questions mid-answer.
+assert not panel._studio_preview_tab.get_sensitive()
+assert not panel._studio_review_tab.get_sensitive()
+assert all(not pill.get_sensitive() for pill in panel._studio_action_pills)
+
+# On the studio the content fills top-to-bottom (no floating margins).
+assert panel._content_alignment.get_property('yscale') == 1.0, \\
+    panel._content_alignment.get_property('yscale')
+
+panel.destroy()
+window.destroy()
+print('OFFSCREEN-GUIDED-TRIGGER-OK')
+'''
+
+
+_OFFSCREEN_CHAT_AVATAR_SCRIPT = '''
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk
+
+from ui.panel import CreateAIActivityPanel
+
+
+def pump():
+    while Gtk.events_pending():
+        Gtk.main_iteration_do(False)
+
+
+def all_label_text(widget):
+    texts = []
+    getter = getattr(widget, 'get_children', None)
+    if getter is None:
+        return texts
+    for child in getter():
+        if isinstance(child, Gtk.Label):
+            texts.append(child.get_text())
+        texts.extend(all_label_text(child))
+    return texts
+
+
+window = Gtk.OffscreenWindow()
+panel = CreateAIActivityPanel()
+window.add(panel)
+window.show_all()
+panel.reset_view()
+pump()
+
+# An AI message is presented as "Mr John" with the round avatar.
+panel._add_chat_bubble('Hello there!', from_user=False, scroll=False)
+pump()
+labels = all_label_text(panel._chat_messages_box)
+assert 'Mr John' in labels, labels
+assert 'J' in labels, labels
+
+# The thinking indicator also carries the Mr John avatar/name.
+row = panel._show_typing_bubble(panel._chat_messages_box, None)
+pump()
+assert row is not None
+typing_labels = all_label_text(row)
+assert any('Mr John' in text for text in typing_labels), typing_labels
+assert any('thinking' in text for text in typing_labels), typing_labels
+assert getattr(row, '_typing_dots', None) is not None
+panel._remove_typing_bubble(row)
+
+panel.destroy()
+window.destroy()
+print('OFFSCREEN-CHAT-AVATAR-OK')
+'''
+
+
+_OFFSCREEN_STEPS_SCRIPT = '''
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk
+
+from ui.panel import CreateAIActivityPanel
+
+
+def pump():
+    while Gtk.events_pending():
+        Gtk.main_iteration_do(False)
+
+
+def all_label_text(widget):
+    texts = []
+    getter = getattr(widget, 'get_children', None)
+    if getter is None:
+        return texts
+    for child in getter():
+        if isinstance(child, Gtk.Label):
+            texts.append(child.get_text())
+        texts.extend(all_label_text(child))
+    return texts
+
+
+window = Gtk.OffscreenWindow()
+panel = CreateAIActivityPanel()
+window.add(panel)
+window.show_all()
+panel.reset_view()
+pump()
+
+panel._start_generation_steps()
+pump()
+labels = all_label_text(panel._chat_messages_box)
+assert 'Thinking through your idea' in labels, labels
+assert 'Building your activity' in labels, labels
+assert 'Getting it ready to play' in labels, labels
+
+# Advancing to code generation marks earlier steps done and this one active.
+panel._update_generation_steps('generating')
+pump()
+assert panel._step_rows['planning']._step_state == 'done'
+assert panel._step_rows['grounding']._step_state == 'done'
+assert panel._step_rows['writing']._step_state == 'active'
+assert panel._step_rows['packaging']._step_state == 'pending'
+
+# The active step is emphasised and a live sub-status reflects the work.
+assert panel._step_labels['writing'].get_style_context().has_class(
+    'create-ai-step-label-active')
+panel._set_step_substatus('Writing with the model…')
+pump()
+assert panel._step_sub_label.get_text() == 'Writing with the model…'
+
+# Finishing marks everything done and flips the name to Done.
+panel._finish_generation_steps()
+pump()
+assert all(icon._step_state == 'done'
+           for icon in panel._step_rows.values())
+assert any('Done' in text for text in all_label_text(panel._step_widget))
+
+panel.destroy()
+window.destroy()
+print('OFFSCREEN-STEPS-OK')
+'''
+
+
 @unittest.skipUnless(
     _gtk_display_available(), 'needs a usable display server')
 class TestStudioOffscreen(unittest.TestCase):
@@ -351,6 +626,38 @@ class TestStudioOffscreen(unittest.TestCase):
             'offscreen target test failed:\n%s%s'
             % (completed.stdout, completed.stderr))
         self.assertIn('OFFSCREEN-TARGET-OK', completed.stdout)
+
+    def test_guided_flow_renders_and_builds(self):
+        completed = self._run_offscreen(_OFFSCREEN_GUIDED_SCRIPT)
+        self.assertEqual(
+            0, completed.returncode,
+            'offscreen guided test failed:\n%s%s'
+            % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-GUIDED-OK', completed.stdout)
+
+    def test_guided_flow_triggers_on_send_and_studio_fills(self):
+        completed = self._run_offscreen(_OFFSCREEN_GUIDED_TRIGGER_SCRIPT)
+        self.assertEqual(
+            0, completed.returncode,
+            'offscreen guided trigger test failed:\n%s%s'
+            % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-GUIDED-TRIGGER-OK', completed.stdout)
+
+    def test_chat_ai_messages_carry_mr_john_avatar(self):
+        completed = self._run_offscreen(_OFFSCREEN_CHAT_AVATAR_SCRIPT)
+        self.assertEqual(
+            0, completed.returncode,
+            'offscreen chat avatar test failed:\n%s%s'
+            % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-CHAT-AVATAR-OK', completed.stdout)
+
+    def test_generation_step_list_advances_and_completes(self):
+        completed = self._run_offscreen(_OFFSCREEN_STEPS_SCRIPT)
+        self.assertEqual(
+            0, completed.returncode,
+            'offscreen steps test failed:\n%s%s'
+            % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-STEPS-OK', completed.stdout)
 
 
 if __name__ == '__main__':

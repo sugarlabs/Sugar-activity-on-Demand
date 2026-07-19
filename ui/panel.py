@@ -179,6 +179,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._studio_preview_tab = None
         self._studio_review_tab = None
         self._studio_versions_tab = None
+        self._studio_action_pills = []
         self._studio_mode_stack = None
         self._review_file_buttons = []
         self._review_title_label = None
@@ -246,6 +247,16 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._enhance_chip_value_label = None
         self._enhance_running = False
         self._enhanced_prompt_announced = False
+        self._guided_state = None
+        self._guided_view = None
+        self._guided_body = None
+        self._guided_status_label = None
+        self._guided_running = False
+        self._step_widget = None
+        self._step_rows = {}
+        self._step_labels = {}
+        self._step_sub_label = None
+        self._step_index = -1
         self._preview_is_fullscreen = False
         self._preview_fullscreen_button = None
         self._studio_left_panel = None
@@ -285,6 +296,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._stack.set_transition_duration(180)
         self._content_alignment.add(self._stack)
         self._stack.show()
+        # Short screens (home/create) look best centered; the studio must
+        # fill the window top-to-bottom instead of floating in the middle.
+        self._stack.connect('notify::visible-child-name',
+                            self.__content_stack_child_changed_cb)
 
         home_view = self._create_home_view()
         self._stack.add_named(home_view, 'home')
@@ -1047,6 +1062,674 @@ class CreateAIActivityPanel(Gtk.EventBox):
                   'unchanged'))
         return False
 
+    # ----- Guided generation: questions -> plan -> discuss -> build -----
+
+    def _resolve_active_provider(self):
+        """Return the AI provider generation will actually use, or None.
+
+        Resolves through the service so stored/runtime credentials are
+        honoured (same path generation takes).  Returns None when the
+        effective choice is the local template, so the guided flow is
+        skipped and one-shot local generation still works.
+        """
+        from service.service import get_service
+
+        service = get_service()
+        try:
+            provider_name = self._resolve_generation_provider_name(service)
+        except Exception:
+            logging.exception('Could not compute provider for guided flow')
+            provider_name = self._selected_options.get('provider', 'default')
+        try:
+            return service.resolve_provider(provider_name)
+        except Exception:
+            logging.exception('Could not resolve provider for guided flow')
+            return None
+
+    def _guided_spec_for_prompt(self, prompt):
+        from core.spec import ActivitySpec
+        from core.spec import name_from_prompt
+
+        age_band_map = {
+            'primary': 'ages 6-9',
+            'middle': 'ages 10-13',
+            'senior': 'ages 14+',
+            'all': 'all',
+        }
+        age_band = age_band_map.get(
+            self._selected_options.get('age_band', 'all'), 'all')
+        return ActivitySpec(
+            name=name_from_prompt(prompt),
+            prompt=prompt,
+            category=self._selected_options.get('template', 'logic_math'),
+            license_id=self._get_selected_license()['spdx'],
+            code_size=self._selected_options.get('code_size', 'standard'),
+            age_band=age_band,
+        )
+
+    def _create_guided_page(self):
+        """Themed questionnaire/plan page hosted in the studio preview."""
+        page = Gtk.VBox(spacing=style.zoom(9))
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_propagate_natural_height(True)
+        scroller.set_max_content_height(style.zoom(680))
+
+        frame = Gtk.EventBox()
+        frame.get_style_context().add_class('create-ai-preview-frame')
+
+        # Fill the card width and align to the top, like the real preview.
+        align = Gtk.Alignment(xalign=0.5, yalign=0.0, xscale=1, yscale=0)
+        align.set_padding(style.zoom(14), style.zoom(14),
+                          style.zoom(14), style.zoom(14))
+        body = Gtk.VBox(spacing=style.zoom(16))
+        body.set_border_width(style.zoom(18))
+        body.set_hexpand(True)
+        body.set_halign(Gtk.Align.FILL)
+        self._guided_body = body
+        align.add(body)
+        frame.add(align)
+        scroller.add(frame)
+        page.pack_start(scroller, True, True, 0)
+
+        status = Gtk.Label('')
+        status.set_halign(Gtk.Align.START)
+        status.get_style_context().add_class('create-ai-meta-note')
+        self._guided_status_label = status
+        page.pack_start(status, False, False, 0)
+
+        self._guided_view = page
+        page.show_all()
+        return page
+
+    def __content_stack_child_changed_cb(self, *args):
+        self._apply_content_fill()
+
+    def _apply_content_fill(self):
+        """Fill vertically on the studio; centre the shorter screens."""
+        if self._content_alignment is None:
+            return
+        if self._stack.get_visible_child_name() == 'studio':
+            self._content_alignment.set(0.5, 0.0, 1.0, 1.0)
+        else:
+            self._content_alignment.set(0.5, 0.46, 1.0, 0.0)
+
+    def _enter_guided_studio(self):
+        """Show the guided page inside the studio preview column."""
+        self._stack.set_visible_child_name('studio')
+        if self._studio_mode_stack is not None:
+            self._studio_mode_stack.set_visible_child_name('guided')
+        self._set_studio_tabs_locked(True)
+
+    def _set_studio_tabs_locked(self, locked):
+        """Lock the Preview/Review/Versions tabs during the guided flow so
+        the questionnaire cannot be navigated away from mid-answer."""
+        sensitive = not locked
+        for widget in (self._studio_preview_tab, self._studio_review_tab,
+                       self._studio_versions_tab):
+            if widget is not None:
+                widget.set_sensitive(sensitive)
+        for pill in self._studio_action_pills:
+            pill.set_sensitive(sensitive)
+
+    def _clear_guided_body(self):
+        if self._guided_body is None:
+            return
+        # Destroy (not just remove) so any running tick animations stop.
+        for child in self._guided_body.get_children():
+            child.destroy()
+
+    def _show_guided_message(self, message):
+        """Animated 'thinking' state — a pulsing Sugar XO plus shimmer text,
+        matching the look of the generation screen."""
+        self._clear_guided_body()
+
+        outer = Gtk.VBox(spacing=style.zoom(12))
+        outer.set_halign(Gtk.Align.CENTER)
+        outer.set_valign(Gtk.Align.CENTER)
+        outer.set_margin_top(style.zoom(50))
+        outer.set_margin_bottom(style.zoom(40))
+
+        try:
+            icon = CanvasIcon(icon_name='computer-xo',
+                              pixel_size=style.zoom(120))
+            xo_color = self._home_icon_color()
+            if xo_color is not None:
+                icon.props.xo_color = xo_color
+            icon.set_halign(Gtk.Align.CENTER)
+            outer.pack_start(icon, False, False, 0)
+            icon.add_tick_callback(self._guided_pulse_tick)
+        except Exception:
+            logging.exception('Could not build guided thinking icon')
+
+        title = Gtk.Label(message)
+        title.get_style_context().add_class('create-ai-guided-title')
+        title.set_justify(Gtk.Justification.CENTER)
+        outer.pack_start(title, False, False, 0)
+
+        fun = Gtk.Label(self._generation_fun_messages()[0])
+        fun.get_style_context().add_class('create-ai-generation-fun')
+        fun.set_justify(Gtk.Justification.CENTER)
+        fun.set_line_wrap(True)
+        fun.set_max_width_chars(60)
+        outer.pack_start(fun, False, False, 0)
+        fun.add_tick_callback(self._guided_shimmer_tick)
+
+        self._guided_body.pack_start(outer, True, True, 0)
+        self._guided_body.show_all()
+
+    def _guided_pulse_tick(self, widget, frame_clock):
+        t = frame_clock.get_frame_time() / 1000000.0
+        wave = 0.5 + 0.5 * math.sin(t * 2.3)
+        widget.set_opacity(0.6 + 0.4 * wave)
+        return GLib.SOURCE_CONTINUE
+
+    def _guided_shimmer_tick(self, widget, frame_clock):
+        t = frame_clock.get_frame_time() / 1000000.0
+        wave = 0.5 + 0.5 * math.sin(t * 3.1)
+        widget.set_opacity(0.4 + 0.6 * wave)
+        return GLib.SOURCE_CONTINUE
+
+    def _begin_guided_generation(self, prompt):
+        if self._guided_running:
+            return
+        try:
+            provider = self._resolve_active_provider()
+            spec = None
+            if provider is not None:
+                spec = self._guided_spec_for_prompt(prompt)
+        except Exception:
+            logging.exception(
+                'Guided generation setup failed; using direct flow')
+            provider = None
+        if provider is None or spec is None:
+            # No AI provider configured (or setup failed) — fall back to
+            # the direct one-shot flow so local-template generation works.
+            logging.warning(
+                'Guided flow skipped (no AI provider); direct generation')
+            self._submit_generation_from_prompt(prompt, chat_prompt=prompt)
+            return
+        self._guided_state = {
+            'prompt': prompt,
+            'spec': spec,
+            'provider': provider,
+            'questions': [],
+            'answers': {},
+            'answers_text': '',
+            'answer_widgets': {},
+            'plan_text': '',
+            'discussion': [],
+        }
+        self._guided_running = True
+        self._show_guided_message(_('Thinking about a few good questions…'))
+        self._enter_guided_studio()
+
+        def worker():
+            from llm.clarify import generate_questions
+            questions = generate_questions(provider, spec)
+            GObject.idle_add(self._guided_questions_ready, questions)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _guided_questions_ready(self, questions):
+        self._guided_running = False
+        state = self._guided_state
+        if not state:
+            return False
+        state['questions'] = questions
+        try:
+            if questions:
+                self._show_questions_page(questions)
+            else:
+                self._commit_guided_and_build()
+        except Exception:
+            logging.exception('Guided questions render failed; building')
+            prompt = state.get('prompt', '')
+            self._guided_state = None
+            self._set_studio_tabs_locked(False)
+            self._submit_generation_from_prompt(prompt, chat_prompt=prompt)
+        return False
+
+    def _show_questions_page(self, questions):
+        self._clear_guided_body()
+        state = self._guided_state
+        getters = {}
+
+        title = Gtk.Label(_('A few quick questions'))
+        title.get_style_context().add_class('create-ai-guided-title')
+        title.set_halign(Gtk.Align.START)
+        title.set_xalign(0)
+        self._guided_body.pack_start(title, False, False, 0)
+
+        subtitle = Gtk.Label(
+            _('So I build the right thing for: %s') % state['prompt'])
+        subtitle.set_halign(Gtk.Align.START)
+        subtitle.set_line_wrap(True)
+        subtitle.set_xalign(0)
+        subtitle.get_style_context().add_class('create-ai-guided-subtitle')
+        self._guided_body.pack_start(subtitle, False, False, 0)
+
+        for index, question in enumerate(questions):
+            getters[question['id']] = self._render_question(question, index)
+
+        footer = Gtk.HBox(spacing=style.zoom(8))
+        footer.set_margin_top(style.zoom(10))
+        skip = Gtk.Button(label=_('Skip'))
+        skip.connect('clicked', self.__guided_skip_clicked_cb)
+        footer.pack_start(skip, False, False, 0)
+        cont = Gtk.Button(label=_('Continue'))
+        cont.get_style_context().add_class('create-ai-studio-primary')
+        cont.connect('clicked', self.__guided_continue_clicked_cb)
+        footer.pack_end(cont, False, False, 0)
+        self._guided_body.pack_start(footer, False, False, 0)
+
+        state['answer_widgets'] = getters
+        self._guided_body.show_all()
+        if self._guided_status_label is not None:
+            self._guided_status_label.set_text('')
+
+    def _add_other_entry(self, box):
+        """Add an 'Other…' write-in field to a choice question."""
+        entry = Gtk.Entry()
+        entry.set_placeholder_text(_('Other…'))
+        entry.get_style_context().add_class('create-ai-guided-entry')
+        entry.set_halign(Gtk.Align.START)
+        entry.set_size_request(style.zoom(260), -1)
+        box.pack_start(entry, False, False, 0)
+        return entry
+
+    def _make_guided_chip(self, label):
+        chip = Gtk.ToggleButton(label=label)
+        chip.set_relief(Gtk.ReliefStyle.NONE)
+        chip.get_style_context().add_class('create-ai-guided-chip')
+        return chip
+
+    def _sync_guided_chip(self, chip):
+        ctx = chip.get_style_context()
+        if chip.get_active():
+            ctx.add_class('create-ai-guided-chip-active')
+        else:
+            ctx.remove_class('create-ai-guided-chip-active')
+
+    def __guided_multi_chip_toggled_cb(self, chip):
+        self._sync_guided_chip(chip)
+
+    def __guided_single_chip_toggled_cb(self, chip, siblings, guard):
+        if guard.get('busy'):
+            return
+        if chip.get_active():
+            guard['busy'] = True
+            for other in siblings:
+                if other is not chip and other.get_active():
+                    other.set_active(False)
+            guard['busy'] = False
+        for sibling in siblings:
+            self._sync_guided_chip(sibling)
+
+    def _new_guided_flowbox(self):
+        flow = Gtk.FlowBox()
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_max_children_per_line(8)
+        flow.set_min_children_per_line(1)
+        flow.set_column_spacing(style.zoom(6))
+        flow.set_row_spacing(style.zoom(6))
+        flow.set_homogeneous(False)
+        flow.set_halign(Gtk.Align.FILL)
+        flow.set_hexpand(True)
+        return flow
+
+    def _render_question(self, question, index=0):
+        card = Gtk.VBox(spacing=style.zoom(9))
+        card.get_style_context().add_class('create-ai-guided-card')
+
+        label = Gtk.Label(question['label'])
+        label.get_style_context().add_class('create-ai-guided-question')
+        label.set_halign(Gtk.Align.START)
+        label.set_line_wrap(True)
+        label.set_xalign(0)
+        card.pack_start(label, False, False, 0)
+
+        qtype = question.get('type', 'text')
+        options = question.get('options', [])
+
+        if qtype == 'single' and options:
+            flow = self._new_guided_flowbox()
+            chips = []
+            guard = {'busy': False}
+            for option in options:
+                chip = self._make_guided_chip(option)
+                chip.connect('toggled',
+                             self.__guided_single_chip_toggled_cb,
+                             chips, guard)
+                chips.append(chip)
+                flow.add(chip)
+            card.pack_start(flow, False, False, 0)
+            other = self._add_other_entry(card)
+            self._guided_body.pack_start(card, False, False, 0)
+
+            def getter(chips=chips, other=other):
+                typed = other.get_text().strip()
+                if typed:
+                    return typed
+                for chip in chips:
+                    if chip.get_active():
+                        return chip.get_label()
+                return ''
+            return getter
+
+        if qtype == 'multi' and options:
+            flow = self._new_guided_flowbox()
+            chips = []
+            for option in options:
+                chip = self._make_guided_chip(option)
+                chip.connect('toggled',
+                             self.__guided_multi_chip_toggled_cb)
+                chips.append(chip)
+                flow.add(chip)
+            card.pack_start(flow, False, False, 0)
+            other = self._add_other_entry(card)
+            self._guided_body.pack_start(card, False, False, 0)
+
+            def getter(chips=chips, other=other):
+                values = [chip.get_label() for chip in chips
+                          if chip.get_active()]
+                typed = other.get_text().strip()
+                if typed:
+                    values.append(typed)
+                return values
+            return getter
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text(_('Your answer…'))
+        entry.get_style_context().add_class('create-ai-guided-entry')
+        entry.set_hexpand(True)
+        card.pack_start(entry, False, False, 0)
+        self._guided_body.pack_start(card, False, False, 0)
+
+        def getter(entry=entry):
+            return entry.get_text().strip()
+        return getter
+
+    def __guided_continue_clicked_cb(self, button):
+        self._collect_guided_answers()
+        self._commit_guided_and_build()
+
+    def __guided_skip_clicked_cb(self, button):
+        if self._guided_state is not None:
+            self._guided_state['answers'] = {}
+        self._commit_guided_and_build()
+
+    def _commit_guided_and_build(self):
+        """Fold the answers into the prompt and start building directly —
+        no separate plan-review step."""
+        state = self._guided_state
+        if not state:
+            return
+        from llm.clarify import format_answers
+        state['answers_text'] = format_answers(
+            state.get('questions', []), state.get('answers', {}))
+        self._start_guided_build()
+
+    def _collect_guided_answers(self):
+        state = self._guided_state
+        if not state:
+            return
+        answers = {}
+        for qid, getter in state.get('answer_widgets', {}).items():
+            try:
+                answers[qid] = getter()
+            except Exception:
+                answers[qid] = ''
+        state['answers'] = answers
+
+    def _begin_plan_phase(self):
+        state = self._guided_state
+        if not state or self._guided_running:
+            return
+        from llm.clarify import format_answers
+
+        answers_text = format_answers(
+            state['questions'], state.get('answers', {}))
+        state['answers_text'] = answers_text
+        discussion = '\n'.join(state['discussion']) \
+            if state['discussion'] else ''
+        provider = state['provider']
+        spec = state['spec']
+
+        self._show_plan_page()
+        self._guided_running = True
+
+        def stream_cb(partial):
+            GObject.idle_add(self._plan_stream_update, partial)
+
+        def worker():
+            from llm.clarify import generate_plan_proposal
+            plan = generate_plan_proposal(
+                provider, spec, answers_text, discussion,
+                stream_callback=stream_cb)
+            GObject.idle_add(self._plan_ready, plan)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_plan_page(self):
+        self._clear_guided_body()
+        state = self._guided_state
+
+        title = Gtk.Label(_("Here's the plan"))
+        title.get_style_context().add_class('create-ai-guided-title')
+        title.set_halign(Gtk.Align.START)
+        title.set_xalign(0)
+        self._guided_body.pack_start(title, False, False, 0)
+
+        plan_card = Gtk.EventBox()
+        plan_card.get_style_context().add_class('create-ai-guided-card')
+        plan_card_box = Gtk.VBox(spacing=style.zoom(8))
+        plan_card.add(plan_card_box)
+
+        # A small pulsing XO + shimmer line while the model drafts.
+        state['plan_drafting'] = True
+        drafting = Gtk.HBox(spacing=style.zoom(10))
+        try:
+            icon = CanvasIcon(icon_name='computer-xo',
+                              pixel_size=style.zoom(42))
+            xo_color = self._home_icon_color()
+            if xo_color is not None:
+                icon.props.xo_color = xo_color
+            drafting.pack_start(icon, False, False, 0)
+            icon.add_tick_callback(self._guided_pulse_tick)
+        except Exception:
+            logging.exception('Could not build drafting icon')
+        drafting_label = Gtk.Label(_('Drafting a plan…'))
+        drafting_label.get_style_context().add_class(
+            'create-ai-generation-fun')
+        drafting.pack_start(drafting_label, False, False, 0)
+        drafting_label.add_tick_callback(self._guided_shimmer_tick)
+        state['drafting_box'] = drafting
+        plan_card_box.pack_start(drafting, False, False, 0)
+
+        plan_label = Gtk.Label('')
+        plan_label.set_halign(Gtk.Align.FILL)
+        plan_label.set_xalign(0.0)
+        plan_label.set_yalign(0.0)
+        plan_label.set_line_wrap(True)
+        plan_label.set_selectable(True)
+        plan_label.set_hexpand(True)
+        plan_label.set_no_show_all(True)
+        state['plan_label'] = plan_label
+        plan_card_box.pack_start(plan_label, True, True, 0)
+        self._guided_body.pack_start(plan_card, True, True, 0)
+
+        adjust_row = Gtk.HBox(spacing=style.zoom(6))
+        adjust_row.set_margin_top(style.zoom(10))
+        adjust_row.set_no_show_all(True)
+        entry = Gtk.Entry()
+        entry.set_placeholder_text(
+            _('Ask for a change, e.g. "add a timer"'))
+        entry.get_style_context().add_class('create-ai-guided-entry')
+        entry.connect('activate', self.__guided_adjust_activate_cb)
+        state['adjust_entry'] = entry
+        adjust_row.pack_start(entry, True, True, 0)
+        entry.show()
+        send_change = Gtk.Button(label=_('Send'))
+        send_change.connect('clicked', self.__guided_adjust_clicked_cb)
+        state['adjust_button'] = send_change
+        adjust_row.pack_start(send_change, False, False, 0)
+        send_change.show()
+        state['adjust_row'] = adjust_row
+        self._guided_body.pack_start(adjust_row, False, False, 0)
+
+        footer = Gtk.HBox(spacing=style.zoom(8))
+        footer.set_margin_top(style.zoom(6))
+        back = Gtk.Button(label=_('Back'))
+        back.connect('clicked', self.__guided_back_clicked_cb)
+        footer.pack_start(back, False, False, 0)
+        build = Gtk.Button(label=_('Build it'))
+        build.get_style_context().add_class('create-ai-studio-primary')
+        build.set_no_show_all(True)
+        build.connect('clicked', self.__guided_build_clicked_cb)
+        state['build_button'] = build
+        footer.pack_end(build, False, False, 0)
+        self._guided_body.pack_start(footer, False, False, 0)
+
+        self._guided_body.show_all()
+
+    def _reveal_plan_content(self):
+        state = self._guided_state
+        if not state:
+            return
+        state['plan_drafting'] = False
+        drafting = state.get('drafting_box')
+        if drafting is not None:
+            drafting.hide()
+        label = state.get('plan_label')
+        if label is not None:
+            label.show()
+
+    def _plan_stream_update(self, partial):
+        state = self._guided_state
+        if not state or 'plan_label' not in state:
+            return False
+        text = (partial or '').strip()
+        if not text:
+            return False
+        self._reveal_plan_content()
+        state['plan_label'].set_opacity(1.0)
+        state['plan_label'].set_text(text)
+        return False
+
+    def _plan_ready(self, plan):
+        self._guided_running = False
+        state = self._guided_state
+        if not state:
+            return False
+        state['plan_text'] = plan
+        self._reveal_plan_content()
+        label = state.get('plan_label')
+        if label is not None:
+            try:
+                label.set_markup(self._plan_to_markup(plan))
+            except Exception:
+                label.set_text(plan)
+            self._fade_in_widget(label)
+        adjust_row = state.get('adjust_row')
+        if adjust_row is not None:
+            adjust_row.show()
+            self._fade_in_widget(adjust_row)
+        build = state.get('build_button')
+        if build is not None:
+            build.show()
+            self._fade_in_widget(build)
+        return False
+
+    def _plan_to_markup(self, plan):
+        """Render the light markdown plan as Pango markup: bold headings,
+        real bullets, and a dropped 'reply with…' footer."""
+        lines = []
+        for raw in (plan or '').splitlines():
+            if raw.strip().lower().startswith('reply with any changes'):
+                continue
+            esc = GLib.markup_escape_text(raw)
+            esc = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', esc)
+            esc = re.sub(r'^(\s*)[-*]\s+', r'\1•  ', esc)
+            lines.append(esc)
+        markup = '\n'.join(lines).strip('\n')
+        # Collapse runs of blank lines to a single gap.
+        markup = re.sub(r'\n{3,}', '\n\n', markup)
+        return markup
+
+    def _fade_in_widget(self, widget):
+        clock = {'t0': None}
+
+        def tick(target, frame_clock):
+            now = frame_clock.get_frame_time() / 1000000.0
+            if clock['t0'] is None:
+                clock['t0'] = now
+            progress = min(1.0, (now - clock['t0']) / 0.35)
+            target.set_opacity(progress)
+            return GLib.SOURCE_CONTINUE if progress < 1.0 \
+                else GLib.SOURCE_REMOVE
+
+        widget.set_opacity(0.0)
+        widget.add_tick_callback(tick)
+
+    def __guided_adjust_activate_cb(self, entry):
+        self._submit_guided_adjustment()
+
+    def __guided_adjust_clicked_cb(self, button):
+        self._submit_guided_adjustment()
+
+    def _submit_guided_adjustment(self):
+        state = self._guided_state
+        if not state or self._guided_running:
+            return
+        entry = state.get('adjust_entry')
+        if entry is None:
+            return
+        text = entry.get_text().strip()
+        if not text:
+            return
+        entry.set_text('')
+        if text.lower() in ('build it', 'build', 'looks good', 'go',
+                            'lets do this', "let's do this"):
+            self._start_guided_build()
+            return
+        state['discussion'].append('User: %s' % text)
+        self._begin_plan_phase()
+
+    def __guided_back_clicked_cb(self, button):
+        questions = self._guided_state.get('questions') \
+            if self._guided_state else None
+        if questions:
+            self._show_questions_page(questions)
+        else:
+            self._exit_guided()
+
+    def _exit_guided(self):
+        self._guided_state = None
+        self._guided_running = False
+        self._set_studio_tabs_locked(False)
+        self._stack.set_visible_child_name('create')
+
+    def __guided_build_clicked_cb(self, button):
+        self._start_guided_build()
+
+    def _start_guided_build(self):
+        state = self._guided_state
+        if not state:
+            return
+        from llm.clarify import build_activity_prompt
+
+        enriched = build_activity_prompt(
+            state['prompt'],
+            state.get('answers_text', ''),
+            state.get('plan_text', ''))
+        original = state['prompt']
+        self._guided_state = None
+        self._guided_running = False
+        self._set_studio_tabs_locked(False)
+        self._submit_generation_from_prompt(enriched, chat_prompt=original)
+
     def __validate_chip_toggled_cb(self, button):
         active = button.get_active()
         self._selected_options['validate'] = 'on' if active else 'off'
@@ -1548,6 +2231,352 @@ class CreateAIActivityPanel(Gtk.EventBox):
             stream=True, on_done=None if last else on_done,
             box=box, scroll_cb=scroll_cb, max_chars=max_chars)
 
+    def _create_ai_avatar(self):
+        """Mr John's round avatar chip."""
+        avatar = Gtk.Label('J')
+        avatar.get_style_context().add_class('create-ai-avatar')
+        avatar.set_size_request(style.zoom(30), style.zoom(30))
+        avatar.set_justify(Gtk.Justification.CENTER)
+        avatar.set_xalign(0.5)
+        avatar.set_yalign(0.5)
+        return avatar
+
+    def _create_user_avatar(self):
+        """The student's round avatar — a simple person silhouette."""
+        area = Gtk.DrawingArea()
+        area.set_size_request(style.zoom(30), style.zoom(30))
+        area.connect('draw', self._draw_user_avatar)
+        return area
+
+    def _draw_user_avatar(self, area, cr):
+        w = area.get_allocated_width()
+        h = area.get_allocated_height()
+        size = min(w, h)
+        cx, cy = w / 2.0, h / 2.0
+        cr.arc(cx, cy, size / 2.0, 0, 2 * math.pi)
+        cr.set_source_rgb(0.24, 0.65, 0.58)  # teal chip
+        cr.fill()
+        cr.set_source_rgba(1, 1, 1, 0.95)
+        cr.arc(cx, cy - size * 0.10, size * 0.17, 0, 2 * math.pi)  # head
+        cr.fill()
+        cr.arc(cx, cy + size * 0.42, size * 0.30, math.pi, 2 * math.pi)
+        cr.fill()  # shoulders
+        return False
+
+    def _wrap_ai_row(self, inner, name=None):
+        """Lay an AI bubble out as a character message: avatar + name above
+        the bubble, left-aligned with a trailing spacer."""
+        row = Gtk.HBox(spacing=style.zoom(8))
+        avatar = self._create_ai_avatar()
+        avatar.set_valign(Gtk.Align.START)
+        row.pack_start(avatar, False, False, 0)
+        avatar.show()
+
+        col = Gtk.VBox(spacing=style.zoom(2))
+        name_label = Gtk.Label(name or _('Mr John'))
+        name_label.get_style_context().add_class('create-ai-chat-name')
+        name_label.set_xalign(0)
+        col.pack_start(name_label, False, False, 0)
+        name_label.show()
+        col.pack_start(inner, False, False, 0)
+        col.show()
+        row.pack_start(col, False, False, 0)
+        row._name_label = name_label
+
+        spacer = Gtk.Label()
+        row.pack_start(spacer, True, True, 0)
+        spacer.show()
+        return row
+
+    _GENERATION_STEP_DEFS = (
+        ('planning', 'Thinking through your idea'),
+        ('grounding', 'Looking at real activities for ideas'),
+        ('writing', 'Building your activity'),
+        ('validating', 'Making sure it works'),
+        ('packaging', 'Getting it ready to play'),
+    )
+    _STEP_SUBLINES = {
+        'planning': 'Working out the screens, controls, and how it plays…',
+        'grounding': 'Peeking at real Sugar activities for good ideas…',
+        'writing': 'Writing it in Python, piece by piece…',
+        'validating': 'Running it to make sure nothing breaks…',
+        'packaging': 'Wrapping it up so you can open and play it…',
+    }
+    _STATUS_TO_STEP = {
+        'planning': 0, 'grounding': 1, 'provider': 2, 'generating': 2,
+        'validating': 3, 'packaging': 4,
+    }
+
+    def _make_step_icon(self, pos='middle'):
+        area = Gtk.DrawingArea()
+        area.set_size_request(style.zoom(22), style.zoom(32))
+        area._step_state = 'pending'
+        area._step_phase = 0.0
+        area._step_tick = 0
+        area._step_pos = pos
+        area.connect('draw', self._draw_step_icon)
+        return area
+
+    def _draw_step_icon(self, area, cr):
+        w = area.get_allocated_width()
+        h = area.get_allocated_height()
+        cx, cy = w / 2.0, h / 2.0
+        r = style.zoom(7)
+        pos = getattr(area, '_step_pos', 'middle')
+        state = getattr(area, '_step_state', 'pending')
+        done = state == 'done'
+
+        # Connecting timeline line — the segment above/below the node.
+        gap = r + style.zoom(2)
+        cr.set_line_width(max(1.5, style.zoom(2)))
+        if pos not in ('first', 'only'):
+            if done:
+                cr.set_source_rgba(0.42, 0.36, 0.78, 0.55)
+            else:
+                cr.set_source_rgba(0.55, 0.55, 0.62, 0.30)
+            cr.move_to(cx, 0)
+            cr.line_to(cx, cy - gap)
+            cr.stroke()
+        if pos not in ('last', 'only'):
+            if done:
+                cr.set_source_rgba(0.42, 0.36, 0.78, 0.55)
+            else:
+                cr.set_source_rgba(0.55, 0.55, 0.62, 0.30)
+            cr.move_to(cx, cy + gap)
+            cr.line_to(cx, h)
+            cr.stroke()
+
+        # The node itself.
+        if state == 'done':
+            cr.set_source_rgb(0.42, 0.36, 0.78)
+            cr.arc(cx, cy, r, 0, 2 * math.pi)
+            cr.fill()
+            cr.set_source_rgb(1, 1, 1)
+            cr.set_line_width(max(1.5, style.zoom(2)))
+            cr.move_to(cx - r * 0.42, cy + r * 0.02)
+            cr.line_to(cx - r * 0.06, cy + r * 0.36)
+            cr.line_to(cx + r * 0.46, cy - r * 0.34)
+            cr.stroke()
+        elif state == 'active':
+            cr.set_source_rgb(1, 1, 1)
+            cr.arc(cx, cy, r, 0, 2 * math.pi)
+            cr.fill()
+            cr.set_line_width(max(1.5, style.zoom(2)))
+            cr.set_source_rgba(0.42, 0.36, 0.78, 0.22)
+            cr.arc(cx, cy, r, 0, 2 * math.pi)
+            cr.stroke()
+            cr.set_source_rgb(0.42, 0.36, 0.78)
+            start = (getattr(area, '_step_phase', 0.0) * 3.4) % (2 * math.pi)
+            cr.arc(cx, cy, r, start, start + math.pi * 0.7)
+            cr.stroke()
+        else:
+            cr.set_source_rgb(1, 1, 1)
+            cr.arc(cx, cy, r, 0, 2 * math.pi)
+            cr.fill()
+            cr.set_line_width(max(1.0, style.zoom(1.4)))
+            cr.set_source_rgba(0.55, 0.55, 0.6, 0.45)
+            cr.arc(cx, cy, r, 0, 2 * math.pi)
+            cr.stroke()
+        return False
+
+    def _stagger_fade(self, row):
+        self._fade_in_widget(row, rise=0)
+        return False
+
+    def _set_step_state(self, area, state):
+        area._step_state = state
+        tid = getattr(area, '_step_tick', 0)
+        if state == 'active':
+            if not tid:
+                def tick(widget, frame_clock):
+                    widget._step_phase = \
+                        frame_clock.get_frame_time() / 1.0e6
+                    widget.queue_draw()
+                    return GLib.SOURCE_CONTINUE
+                area._step_tick = area.add_tick_callback(tick)
+        elif tid:
+            try:
+                area.remove_tick_callback(tid)
+            except Exception:
+                pass
+            area._step_tick = 0
+        area.queue_draw()
+
+    def _start_generation_steps(self):
+        box = self._chat_messages_box
+        if box is None:
+            return
+        self._remove_generation_steps()
+
+        inner = Gtk.VBox(spacing=style.zoom(7))
+        inner.set_margin_top(style.zoom(7))
+        inner.set_margin_bottom(style.zoom(7))
+        inner.set_margin_start(style.zoom(12))
+        inner.set_margin_end(style.zoom(12))
+        self._step_rows = {}
+        self._step_labels = {}
+        step_rows = []
+        total = len(self._GENERATION_STEP_DEFS)
+        for i, (key, text) in enumerate(self._GENERATION_STEP_DEFS):
+            if total == 1:
+                pos = 'only'
+            elif i == 0:
+                pos = 'first'
+            elif i == total - 1:
+                pos = 'last'
+            else:
+                pos = 'middle'
+            srow = Gtk.HBox(spacing=style.zoom(6))
+            icon = self._make_step_icon(pos)
+            icon.set_valign(Gtk.Align.CENTER)
+            srow.pack_start(icon, False, False, 0)
+            icon.show()
+            label = Gtk.Label(_(text))
+            label.get_style_context().add_class('create-ai-step-label')
+            label.get_style_context().add_class('create-ai-step-label-pending')
+            label.set_xalign(0)
+            label.set_line_wrap(False)
+            label.set_valign(Gtk.Align.CENTER)
+            srow.pack_start(label, False, False, 0)
+            label.show()
+            inner.pack_start(srow, False, False, 0)
+            srow.show()
+            step_rows.append(srow)
+            self._step_rows[key] = icon
+            self._step_labels[key] = label
+
+        sub = Gtk.Label('')
+        sub.get_style_context().add_class('create-ai-generation-fun')
+        sub.set_xalign(0)
+        sub.set_line_wrap(True)
+        sub.set_max_width_chars(38)
+        sub.set_margin_top(style.zoom(3))
+        sub.set_margin_start(style.zoom(24))
+        sub.set_no_show_all(True)
+        inner.pack_start(sub, False, False, 0)
+        self._step_sub_label = sub
+        inner.show()
+
+        bubble = Gtk.EventBox()
+        bubble.get_style_context().add_class('create-ai-chat-bubble')
+        bubble.get_style_context().add_class('create-ai-chat-bubble-ai')
+        bubble.add(inner)
+        bubble.show()
+
+        row = self._wrap_ai_row(bubble, name=_('Mr John is working…'))
+        box.pack_start(row, False, False, 0)
+        row.show()
+        self._step_widget = row
+        self._step_index = -1
+        self._fade_in_widget(row)
+        # Steps ease in one after another for a calm, reflective reveal.
+        for i, srow in enumerate(step_rows):
+            srow.set_opacity(0.0)
+            GLib.timeout_add(140 + i * 95, self._stagger_fade, srow)
+        GObject.idle_add(self.__scroll_chat_to_bottom)
+
+    def _emphasise_step_label(self, key, mode):
+        """mode: 'pending' | 'active' | 'done'."""
+        label = self._step_labels.get(key)
+        if label is None:
+            return
+        ctx = label.get_style_context()
+        ctx.remove_class('create-ai-step-label-pending')
+        ctx.remove_class('create-ai-step-label-active')
+        if mode == 'pending':
+            ctx.add_class('create-ai-step-label-pending')
+        elif mode == 'active':
+            ctx.add_class('create-ai-step-label-active')
+
+    def _set_step_substatus(self, text):
+        label = self._step_sub_label
+        if label is None:
+            return
+        text = (text or '').strip()
+        if text and self._step_index >= 0:
+            label.set_text(text)
+            label.show()
+        else:
+            label.set_text('')
+            label.hide()
+
+    def _update_generation_steps(self, status):
+        if not self._step_rows:
+            return
+        idx = self._STATUS_TO_STEP.get(status)
+        if idx is None:
+            return
+        for i, (key, _text) in enumerate(self._GENERATION_STEP_DEFS):
+            icon = self._step_rows.get(key)
+            if icon is None:
+                continue
+            if i < idx:
+                self._set_step_state(icon, 'done')
+                self._emphasise_step_label(key, 'done')
+            elif i == idx:
+                self._set_step_state(icon, 'active')
+                self._emphasise_step_label(key, 'active')
+        if idx > self._step_index:
+            self._step_index = idx
+        active_key = self._GENERATION_STEP_DEFS[idx][0]
+        self._set_step_substatus(_(self._STEP_SUBLINES.get(active_key, '')))
+
+    def _finish_generation_steps(self):
+        if not self._step_rows:
+            return
+        for key, _text in self._GENERATION_STEP_DEFS:
+            icon = self._step_rows.get(key)
+            if icon is not None:
+                self._set_step_state(icon, 'done')
+            self._emphasise_step_label(key, 'done')
+        self._set_step_substatus('')
+        widget = self._step_widget
+        if widget is not None:
+            name_label = getattr(widget, '_name_label', None)
+            if name_label is not None:
+                name_label.set_text(_('Mr John · Done'))
+
+    def _fail_generation_steps(self):
+        for key, _text in self._GENERATION_STEP_DEFS:
+            icon = self._step_rows.get(key) if self._step_rows else None
+            if icon is not None and \
+                    getattr(icon, '_step_state', '') == 'active':
+                self._set_step_state(icon, 'pending')
+
+    def _remove_generation_steps(self):
+        for icon in (self._step_rows or {}).values():
+            tid = getattr(icon, '_step_tick', 0)
+            if tid:
+                try:
+                    icon.remove_tick_callback(tid)
+                except Exception:
+                    pass
+        self._step_rows = {}
+        self._step_labels = {}
+        self._step_sub_label = None
+        widget = self._step_widget
+        if widget is not None:
+            try:
+                widget.destroy()
+            except Exception:
+                pass
+        self._step_widget = None
+        self._step_index = -1
+
+    def _wrap_user_row(self, inner):
+        """Student message: trailing spacer, blue bubble, avatar on the far
+        right — mirrors the character layout on the other side."""
+        row = Gtk.HBox(spacing=style.zoom(8))
+        spacer = Gtk.Label()
+        row.pack_start(spacer, True, True, 0)
+        spacer.show()
+        row.pack_start(inner, False, False, 0)
+        avatar = self._create_user_avatar()
+        avatar.set_valign(Gtk.Align.START)
+        row.pack_start(avatar, False, False, 0)
+        avatar.show()
+        return row
+
     def _create_typing_dots(self):
         """A small AI bubble's worth of three dots that pulse in sequence."""
         area = Gtk.DrawingArea()
@@ -1586,7 +2615,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
         """Add a pulsing 'typing…' bubble; returns the row to remove later."""
         if box is None:
             return None
-        row = Gtk.HBox()
         bubble = Gtk.EventBox()
         bubble.get_style_context().add_class('create-ai-chat-bubble')
         bubble.get_style_context().add_class('create-ai-chat-bubble-ai')
@@ -1598,14 +2626,11 @@ class CreateAIActivityPanel(Gtk.EventBox):
         dots.set_margin_end(style.zoom(12))
         bubble.add(dots)
         dots.show()
-        row._typing_dots = dots
-
-        spacer = Gtk.Label()
-        row.pack_start(bubble, False, False, 0)
-        row.pack_start(spacer, True, True, 0)
-        box.pack_start(row, False, False, 0)
-        spacer.show()
         bubble.show()
+
+        row = self._wrap_ai_row(bubble, name=_('Mr John is thinking…'))
+        row._typing_dots = dots
+        box.pack_start(row, False, False, 0)
         row.show()
         self._fade_in_widget(row)
         if scroll_cb is not None:
@@ -1642,7 +2667,6 @@ class CreateAIActivityPanel(Gtk.EventBox):
         if scroll_cb is None:
             scroll_cb = self.__scroll_chat_to_bottom
 
-        row = Gtk.HBox()
         bubble = Gtk.EventBox()
         bubble.get_style_context().add_class('create-ai-chat-bubble')
         if from_user:
@@ -1655,24 +2679,20 @@ class CreateAIActivityPanel(Gtk.EventBox):
         label.set_line_wrap(True)
         label.set_max_width_chars(max_chars)
         label.set_xalign(0)
-        label.set_margin_top(style.zoom(6))
-        label.set_margin_bottom(style.zoom(6))
+        label.set_margin_top(style.zoom(5))
+        label.set_margin_bottom(style.zoom(5))
         label.set_margin_start(style.zoom(10))
         label.set_margin_end(style.zoom(10))
         bubble.add(label)
         label.show()
+        bubble.show()
 
-        spacer = Gtk.Label()
         if from_user:
-            row.pack_start(spacer, True, True, 0)
-            row.pack_start(bubble, False, False, 0)
+            row = self._wrap_user_row(bubble)
         else:
-            row.pack_start(bubble, False, False, 0)
-            row.pack_start(spacer, True, True, 0)
+            row = self._wrap_ai_row(bubble)
 
         box.pack_start(row, False, False, 0)
-        spacer.show()
-        bubble.show()
         row.show()
 
         # Every bubble drifts in with a soft fade; streamed ones then
@@ -1841,10 +2861,12 @@ class CreateAIActivityPanel(Gtk.EventBox):
         modes = Gtk.HBox(spacing=style.zoom(6))
         panel.pack_start(modes, False, False, 0)
         modes.show()
+        self._studio_action_pills = []
         for label, tab_name in ((_('Make'), 'review'), (_('Play'), 'preview'),
                                 (_('Share'), 'versions')):
-            modes.pack_start(
-                self._create_action_pill(label, tab_name), False, False, 0)
+            pill = self._create_action_pill(label, tab_name)
+            self._studio_action_pills.append(pill)
+            modes.pack_start(pill, False, False, 0)
 
         self._studio_mode_stack = Gtk.Stack()
         self._studio_mode_stack.set_transition_type(
@@ -1874,6 +2896,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
         versions_page = self._create_versions_page()
         self._studio_mode_stack.add_named(versions_page, 'versions')
         versions_page.show()
+
+        guided_page = self._create_guided_page()
+        self._studio_mode_stack.add_named(guided_page, 'guided')
+        guided_page.show()
 
         self._studio_mode_stack.set_visible_child_name('preview')
 
@@ -7393,7 +8419,7 @@ if clipboard.wait_is_text_available():
                 self._prompt_status_label.set_text(_('Need prompt'))
             return
 
-        self._submit_generation_from_prompt(prompt, chat_prompt=prompt)
+        self._begin_guided_generation(prompt)
 
     def _submit_generation_from_prompt(self, prompt, chat_prompt=None):
         from core.spec import ActivitySpec
@@ -7641,6 +8667,15 @@ if clipboard.wait_is_text_available():
             _('Planner: %s · %s') %
             (self._get_provider_label(provider_name),
              license_info['label']))
+        if is_refinement:
+            self._append_chat_message(
+                _("Got it — I'll tweak that now. ✏️"),
+                from_user=False, scroll=False)
+        else:
+            self._append_chat_message(
+                _('Ooh, I love this idea! Give me a moment while I build '
+                  'it for you. 🛠️'), from_user=False, scroll=False)
+        self._start_generation_steps()
         self._review_generation_context = {
             'provider': self._get_provider_label(provider_name),
             'stage': 'queued',
@@ -7768,11 +8803,10 @@ if clipboard.wait_is_text_available():
         enhanced = getattr(job, 'enhanced_prompt', '') if job else ''
         if enhanced and not self._enhanced_prompt_announced:
             self._enhanced_prompt_announced = True
-            self._append_chat_status(_('✨ Enhanced your prompt'))
-            self._append_chat_message(
-                _('I understood your idea as:\n%s') % enhanced,
-                from_user=False)
+            self._append_chat_status(_('✨ Got your idea'))
         self._announce_repair_events(job)
+        self._update_generation_steps(getattr(job, 'status', '') if job
+                                      else '')
         self._update_live_review_generation(stage, fraction, message, job)
         self._update_provider_call_status(stage, fraction, message)
         self._update_generation_animation(stage, fraction, message)
@@ -7926,6 +8960,7 @@ if clipboard.wait_is_text_available():
         project without pretending it was just generated in chat.
         """
         self._detach_generation_job()
+        self._finish_generation_steps()
         self._generation_result = result
         self._review_generation_context = {}
         self._review_draft_was_shown = False
@@ -7980,45 +9015,15 @@ if clipboard.wait_is_text_available():
         return False
 
     def _build_generation_chat_messages(self, result, plan):
-        """Return a list of short chat bubbles describing the generated activity."""
+        """One warm, student-friendly recap — the step list already showed
+        the work, so there's no need to dump the whole plan again."""
         spec = result.spec
-        name = spec.name or _('the activity')
-        summary = plan.get('summary', '')
-        activity_kind = plan.get('activity_kind', '')
-        interaction = plan.get('interaction_model', '')
-        template = plan.get('template', '')
-        learner_steps = plan.get('learner_steps') or []
-        features = plan.get('features') or []
-
-        msgs = []
-
-        # Bubble 1 — short opener with name + kind
-        kind_parts = [p for p in (activity_kind, template) if p]
-        if kind_parts:
-            msgs.append(
-                _("Done! I built %(name)s — %(kind)s.") % {
-                    'name': name,
-                    'kind': kind_parts[0],
-                })
-        else:
-            msgs.append(_("Done! %(name)s is ready.") % {'name': name})
-
-        # Bubble 2 — one-line summary or interaction model
-        detail = summary or (
-            _('Interaction: %s') % interaction if interaction else '')
-        if detail:
-            msgs.append(detail[:120])
-
-        # Bubble 3 — first learner step or feature as a teaser
-        teaser = next(iter(learner_steps or features), '')
-        if teaser:
-            msgs.append('• %s' % str(teaser)[:100])
-
-        # Final bubble — action prompt
-        msgs.append(_('Click anywhere in the preview to pick a target, '
-                       'then tell me what to change.'))
-
-        return msgs
+        name = spec.name or _('your activity')
+        return [
+            _('🎉 All done! %(name)s is ready — open the preview and give '
+              "it a try. Tell me what you'd like to change and I'll fix it "
+              'right up.') % {'name': name},
+        ]
 
     def _update_sidebar_challenges(self, result, plan):
         """Replace the learning sidebar challenge cards with activity-specific ones."""
@@ -8172,6 +9177,7 @@ if clipboard.wait_is_text_available():
 
     def _generation_failed_cb(self, error_text, job=None):
         self._detach_generation_job()
+        self._fail_generation_steps()
         display_error = _clean_generation_error_text(error_text)
         draft_source = ''
         if job is not None:

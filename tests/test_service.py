@@ -336,6 +336,22 @@ class TestAodService(unittest.TestCase):
         self.assertTrue(statuses['openai']['configured'])
         self.assertEqual('runtime-test', statuses['openai']['model'])
 
+    def test_resolve_provider_returns_runtime_override(self):
+        provider = _RuntimeProvider('session-secret')
+        self.service.register_provider(provider)
+        self.assertIs(provider, self.service.resolve_provider('openai'))
+
+    def test_resolve_provider_uses_saved_api_key(self):
+        self.service.configure_provider(
+            'openai', api_key='saved-key', model='saved-model', persist=True)
+        resolved = self.service.resolve_provider('openai')
+        self.assertIsNotNone(resolved)
+        self.assertEqual('openai', resolved.name)
+
+    def test_resolve_provider_none_for_local_and_unconfigured(self):
+        self.assertIsNone(self.service.resolve_provider('local-template'))
+        self.assertIsNone(self.service.resolve_provider('openai'))
+
     def test_saved_provider_settings_load_after_service_restart(self):
         secret = 'saved-service-secret'
         provider = self.service.configure_provider(
