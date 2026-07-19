@@ -483,19 +483,18 @@ window.show_all()
 panel.reset_view()
 pump()
 
-# An AI message is presented as "Mr John" with the round avatar.
+# An AI message is presented as "Sparky" with the round drawn avatar.
 panel._add_chat_bubble('Hello there!', from_user=False, scroll=False)
 pump()
 labels = all_label_text(panel._chat_messages_box)
-assert 'Mr John' in labels, labels
-assert 'J' in labels, labels
+assert 'Sparky' in labels, labels
 
-# The thinking indicator also carries the Mr John avatar/name.
+# The thinking indicator also carries the Sparky avatar/name.
 row = panel._show_typing_bubble(panel._chat_messages_box, None)
 pump()
 assert row is not None
 typing_labels = all_label_text(row)
-assert any('Mr John' in text for text in typing_labels), typing_labels
+assert any('Sparky' in text for text in typing_labels), typing_labels
 assert any('thinking' in text for text in typing_labels), typing_labels
 assert getattr(row, '_typing_dots', None) is not None
 panel._remove_typing_bubble(row)
