@@ -594,27 +594,51 @@ _CSS_TEMPLATE = '''
                 font-size: 12px;
             }
             .create-ai-chat-bubble {
-                border-radius: 12px;
-                border: 1px solid %(studio_edge)s;
-                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+                border-radius: 13px;
+                border: 1px solid %(studio_edge_soft)s;
+                box-shadow: none;
             }
             .create-ai-chat-bubble-ai {
-                background-color: %(bubble_ai)s;
-                border-color: %(bubble_ai_border)s;
+                background-color: %(studio_lavender_soft)s;
+                border-color: %(studio_edge_soft)s;
             }
             .create-ai-chat-bubble-ai label {
-                color: %(bubble_ai_text)s;
+                color: %(toolbar)s;
             }
             .create-ai-chat-bubble-user {
-                background-color: %(sky_soft)s;
-                border-color: %(sky_border)s;
+                background-color: %(user_blue)s;
+                border-color: %(user_blue)s;
             }
             .create-ai-chat-bubble-user label {
-                color: %(sky_text)s;
+                color: %(user_blue_text)s;
             }
             .create-ai-chat-text {
                 color: %(toolbar)s;
-                font-size: 12px;
+                font-size: 11px;
+            }
+            .create-ai-chat-name {
+                color: %(inactive_stroke)s;
+                font-size: 10px;
+                font-weight: 600;
+                letter-spacing: 0.02em;
+            }
+            .create-ai-step-label {
+                color: %(toolbar)s;
+                font-size: 11px;
+            }
+            .create-ai-step-label-pending {
+                color: %(inactive_stroke)s;
+            }
+            .create-ai-step-label-active {
+                color: %(accent_violet)s;
+                font-weight: 700;
+            }
+            .create-ai-avatar {
+                border-radius: 40px;
+                background-color: %(accent_violet)s;
+                color: %(accent_text)s;
+                font-weight: 700;
+                font-size: 13px;
             }
             .create-ai-chat-status {
                 color: #5f5f5f;
@@ -622,36 +646,43 @@ _CSS_TEMPLATE = '''
                 padding: 2px 4px;
             }
             .create-ai-chat-composer {
-                border-radius: 12px;
+                border-radius: 15px;
                 border: 1px solid %(studio_edge)s;
                 background-color: %(studio_surface)s;
-                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
             }
             entry.create-ai-chat-entry {
-                border-radius: 7px;
-                border: 1px solid %(studio_edge)s;
-                background-color: %(studio_surface)s;
+                border-radius: 10px;
+                border: 0;
+                background-color: transparent;
                 color: %(toolbar)s;
-                padding: 9px;
+                padding: 10px;
                 font-size: 12px;
             }
             button.create-ai-chat-send {
-                border-radius: 7px;
-                border: 1px solid %(studio_lavender_border)s;
+                border-radius: 13px;
+                border: 0;
                 background-image: none;
-                background-color: %(studio_lavender)s;
-                color: %(studio_lavender_text)s;
-                padding: 8px 14px;
+                background-color: #e8894f;
+                color: #ffffff;
+                padding: 9px 18px;
                 font-size: 12px;
                 font-weight: 700;
+                box-shadow: -2px -2px 5px rgba(255, 255, 255, 0.55),
+                             3px 3px 8px rgba(196, 96, 44, 0.28);
             }
             button.create-ai-chat-send:hover {
-                background-color: %(studio_lavender_soft)s;
-                border-color: %(studio_lavender_border)s;
-                color: %(studio_lavender_text)s;
+                background-color: #ef975c;
+                box-shadow: -2px -2px 5px rgba(255, 255, 255, 0.55),
+                             3px 3px 10px rgba(196, 96, 44, 0.32);
+            }
+            button.create-ai-chat-send:active {
+                background-color: #dd7f45;
+                box-shadow: inset -2px -2px 5px rgba(255, 255, 255, 0.28),
+                            inset 2px 2px 6px rgba(150, 70, 30, 0.35);
             }
             button.create-ai-chat-send label {
-                color: %(studio_lavender_text)s;
+                color: #ffffff;
             }
             .create-ai-studio-mini-prompt {
                 border-radius: 10px;
@@ -1086,10 +1117,9 @@ _CSS_TEMPLATE = '''
                 background-color: #5a5a5a;
             }
             .create-ai-learning-sidebar {
-                border-radius: 12px;
-                border: 1px solid %(studio_edge)s;
-                background-color: %(studio_surface)s;
-                box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+                border: 0;
+                background-color: transparent;
+                box-shadow: none;
             }
             .create-ai-learning-card {
                 border-radius: 10px;
@@ -1149,6 +1179,68 @@ _CSS_TEMPLATE = '''
             .create-ai-challenge-c3 { border-left-color: #3f9b8e; }
             .create-ai-challenge-c4 { border-left-color: #4a90d9; }
             .create-ai-challenge-c5 { border-left-color: #9b6ac0; }
+            .create-ai-guided-title {
+                color: %(toolbar)s;
+                font-size: 17px;
+                font-weight: 600;
+            }
+            .create-ai-guided-subtitle {
+                color: %(inactive_stroke)s;
+                font-size: 12px;
+            }
+            .create-ai-guided-question {
+                color: %(toolbar)s;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            button.create-ai-guided-chip {
+                border-radius: 15px;
+                border: 1px solid %(studio_edge_soft)s;
+                background-image: none;
+                background-color: %(studio_preview)s;
+                color: %(toolbar)s;
+                padding: 5px 14px;
+                min-height: 0;
+                transition: background-color 120ms ease,
+                            border-color 120ms ease;
+            }
+            button.create-ai-guided-chip label {
+                color: %(toolbar)s;
+                font-size: 12px;
+            }
+            button.create-ai-guided-chip:hover {
+                background-color: %(studio_lavender_soft)s;
+                border-color: %(studio_lavender_faint)s;
+            }
+            button.create-ai-guided-chip-active {
+                background-color: %(violet_soft)s;
+                border-color: %(violet_soft_border)s;
+            }
+            button.create-ai-guided-chip-active label {
+                color: %(accent_violet)s;
+                font-weight: 600;
+            }
+            button.create-ai-guided-chip-active:hover {
+                background-color: %(violet_soft)s;
+                border-color: %(violet_soft_border)s;
+            }
+            .create-ai-guided-entry {
+                border-radius: 11px;
+                border: 1px solid %(studio_edge_soft)s;
+                background-color: %(studio_preview)s;
+                padding: 6px 11px;
+                color: %(toolbar)s;
+            }
+            .create-ai-guided-entry:focus {
+                border-color: %(violet_soft_border)s;
+                background-color: %(studio_surface)s;
+            }
+            .create-ai-guided-card {
+                border-radius: 12px;
+                border: 1px solid %(studio_edge_soft)s;
+                background-color: %(studio_surface)s;
+                padding: 14px 16px;
+            }
         '''
 
 
@@ -1189,6 +1281,8 @@ def _colors():
         'accent_text': '#ffffff',
         'accent_violet': '#6c56c6',   # violet — active tabs
         'accent_violet_hover': '#7c68d6',
+        'violet_soft': '#efeafa',     # soft violet — subtle selected chips
+        'violet_soft_border': '#c9bcec',
         'teal_soft': '#d9f0ea',       # teal — chips
         'teal_border': '#7fc4b7',
         'teal_text': '#154b43',
@@ -1198,6 +1292,8 @@ def _colors():
         'bubble_ai': '#e9f4ee',       # soft mint — the AI's chat bubbles
         'bubble_ai_border': '#c4ded0',
         'bubble_ai_text': '#243f31',
+        'user_blue': '#3b82f6',       # vivid blue — the student's bubbles
+        'user_blue_text': '#ffffff',
     }
 
 
