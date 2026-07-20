@@ -33,6 +33,7 @@ import difflib
 import logging
 import math
 import os
+import random
 import re
 import shutil
 import glob
@@ -2232,14 +2233,30 @@ class CreateAIActivityPanel(Gtk.EventBox):
             box=box, scroll_cb=scroll_cb, max_chars=max_chars)
 
     def _create_ai_avatar(self):
-        """Mr John's round avatar chip."""
-        avatar = Gtk.Label('J')
-        avatar.get_style_context().add_class('create-ai-avatar')
-        avatar.set_size_request(style.zoom(30), style.zoom(30))
-        avatar.set_justify(Gtk.Justification.CENTER)
-        avatar.set_xalign(0.5)
-        avatar.set_yalign(0.5)
-        return avatar
+        """Sparky's round avatar — a white lightning bolt on amber."""
+        area = Gtk.DrawingArea()
+        area.set_size_request(style.zoom(30), style.zoom(30))
+        area.connect('draw', self._draw_ai_avatar)
+        return area
+
+    def _draw_ai_avatar(self, area, cr):
+        w = area.get_allocated_width()
+        h = area.get_allocated_height()
+        cx, cy = w / 2.0, h / 2.0
+        r = min(w, h) / 2.0
+        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.set_source_rgb(0.96, 0.64, 0.14)  # warm amber
+        cr.fill()
+        s = r * 0.95
+        pts = [(0.10, -0.60), (-0.28, 0.06), (-0.02, 0.06),
+               (-0.12, 0.60), (0.30, -0.10), (0.02, -0.10)]
+        cr.set_source_rgb(1, 1, 1)
+        cr.move_to(cx + pts[0][0] * s, cy + pts[0][1] * s)
+        for dx, dy in pts[1:]:
+            cr.line_to(cx + dx * s, cy + dy * s)
+        cr.close_path()
+        cr.fill()
+        return False
 
     def _create_user_avatar(self):
         """The student's round avatar — a simple person silhouette."""
@@ -2273,7 +2290,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         avatar.show()
 
         col = Gtk.VBox(spacing=style.zoom(2))
-        name_label = Gtk.Label(name or _('Mr John'))
+        name_label = Gtk.Label(name or _('Sparky'))
         name_label.get_style_context().add_class('create-ai-chat-name')
         name_label.set_xalign(0)
         col.pack_start(name_label, False, False, 0)
@@ -2463,7 +2480,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         bubble.add(inner)
         bubble.show()
 
-        row = self._wrap_ai_row(bubble, name=_('Mr John is working…'))
+        row = self._wrap_ai_row(bubble, name=_('Sparky is working…'))
         box.pack_start(row, False, False, 0)
         row.show()
         self._step_widget = row
@@ -2534,7 +2551,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         if widget is not None:
             name_label = getattr(widget, '_name_label', None)
             if name_label is not None:
-                name_label.set_text(_('Mr John · Done'))
+                name_label.set_text(_('Sparky · Done'))
 
     def _fail_generation_steps(self):
         for key, _text in self._GENERATION_STEP_DEFS:
@@ -2628,7 +2645,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
         dots.show()
         bubble.show()
 
-        row = self._wrap_ai_row(bubble, name=_('Mr John is thinking…'))
+        row = self._wrap_ai_row(bubble, name=_('Sparky is thinking…'))
         row._typing_dots = dots
         box.pack_start(row, False, False, 0)
         row.show()
@@ -8442,7 +8459,9 @@ if clipboard.wait_is_text_available():
         }.get(self._selected_options.get('collab', 'solo'), '')
 
         spec = ActivitySpec(
-            name=name_from_prompt(prompt),
+            # Name from the learner's actual idea, not the answers-enriched
+            # prompt (which would read like "Confirmed requirements ...").
+            name=name_from_prompt(chat_prompt or prompt),
             prompt=collab_prefix + prompt,
             category=self._selected_options['template'],
             license_id=license_info['spdx'],
@@ -8667,14 +8686,9 @@ if clipboard.wait_is_text_available():
             _('Planner: %s · %s') %
             (self._get_provider_label(provider_name),
              license_info['label']))
-        if is_refinement:
-            self._append_chat_message(
-                _("Got it — I'll tweak that now. ✏️"),
-                from_user=False, scroll=False)
-        else:
-            self._append_chat_message(
-                _('Ooh, I love this idea! Give me a moment while I build '
-                  'it for you. 🛠️'), from_user=False, scroll=False)
+        self._append_chat_message(
+            self._random_opener(spec, is_refinement),
+            from_user=False, scroll=False)
         self._start_generation_steps()
         self._review_generation_context = {
             'provider': self._get_provider_label(provider_name),
@@ -9014,16 +9028,52 @@ if clipboard.wait_is_text_available():
         self._update_sidebar_challenges(result, plan)
         return False
 
+    # Sparky speaks with a little variety so it never feels canned.
+    _OPENERS = (
+        'Ooh, {name} — I love it! Give me a moment. 🛠️',
+        'Nice one! Let me put {name} together for you. ✨',
+        'Great pick! Building {name} right now… 🧩',
+        'Love this idea — firing up the workshop! 🔧',
+        "Fun choice! I'm on {name} — give me a sec. 🚀",
+        'Alright, let\'s make {name}! One moment. ✨',
+        'Oh, this\'ll be fun. Building {name}… 🛠️',
+        'Say no more — {name} coming right up! 🎨',
+    )
+    _REFINE_OPENERS = (
+        "Got it — I'll tweak that now. ✏️",
+        'Sure thing! Adjusting it… ✏️',
+        'On it — making that change. 🔧',
+        'Good call! Updating it now… ✨',
+        'You got it — reworking that bit. ✏️',
+        'Nice idea — folding that in. 🛠️',
+    )
+    _DONE_MESSAGES = (
+        '🎉 All done! {name} is ready — open the preview and give it a try. '
+        'What would you like to change?',
+        '✨ Ta-da! {name} is built. Take it for a spin in the preview, then '
+        'tell me what to tweak.',
+        '🎉 {name} is ready to play! Try it in the preview — I can change '
+        'anything you like.',
+        'Boom — {name} is done! Have a look in the preview and let me know '
+        'what to adjust.',
+        'There we go — {name} is ready! Open the preview, and just say the '
+        'word to refine it.',
+        '🎉 Built it! {name} is live in the preview. Tell me what you\'d '
+        'like different.',
+    )
+
+    def _random_opener(self, spec, is_refinement):
+        if is_refinement:
+            return random.choice(self._REFINE_OPENERS)
+        name = (getattr(spec, 'name', '') or _('your activity')).strip()
+        return random.choice(self._OPENERS).format(name=name)
+
     def _build_generation_chat_messages(self, result, plan):
-        """One warm, student-friendly recap — the step list already showed
-        the work, so there's no need to dump the whole plan again."""
+        """One warm, varied, student-friendly recap — the step list already
+        showed the work, so there's no need to dump the whole plan again."""
         spec = result.spec
-        name = spec.name or _('your activity')
-        return [
-            _('🎉 All done! %(name)s is ready — open the preview and give '
-              "it a try. Tell me what you'd like to change and I'll fix it "
-              'right up.') % {'name': name},
-        ]
+        name = (spec.name or _('your activity')).strip()
+        return [random.choice(self._DONE_MESSAGES).format(name=name)]
 
     def _update_sidebar_challenges(self, result, plan):
         """Replace the learning sidebar challenge cards with activity-specific ones."""
