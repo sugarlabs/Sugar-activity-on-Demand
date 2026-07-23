@@ -242,6 +242,10 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._sidebar_refine_entry = None
         self._sidebar_refine_status_label = None
         self._sidebar_challenge_box = None
+        self._sidebar_reflection_box = None
+        self._sidebar_annotation_box = None
+        self._sidebar_content_boxes = {}
+        self._sidebar_tab_buttons = {}
         self._sidebar_level_label = None
         self._prompt_is_placeholder = False
         self._enhance_button = None
@@ -4650,12 +4654,14 @@ class CreateAIActivityPanel(Gtk.EventBox):
         tabs = Gtk.HBox(spacing=style.zoom(8))
         box.pack_start(tabs, False, False, 0)
         tabs.show()
-        tabs.pack_start(self._create_sidebar_tab(_('Challenges'), True),
-                        True, True, 0)
-        tabs.pack_start(self._create_sidebar_tab(_('Reflections'), False),
-                        True, True, 0)
-        tabs.pack_start(self._create_sidebar_tab(_('Annotations'), False),
-                        True, True, 0)
+        self._sidebar_tab_buttons = {}
+        for key, label in (('challenges', _('Challenges')),
+                           ('reflections', _('Reflections')),
+                           ('annotations', _('Annotations'))):
+            tab = self._create_sidebar_tab(label, False)
+            tab.connect('clicked', self.__sidebar_tab_clicked_cb, key)
+            self._sidebar_tab_buttons[key] = tab
+            tabs.pack_start(tab, True, True, 0)
 
         self._sidebar_level_label = Gtk.Label(
             _('Level 1 unlocked - 8 starter challenges'))
@@ -4671,10 +4677,25 @@ class CreateAIActivityPanel(Gtk.EventBox):
         box.pack_start(scroll, True, True, 0)
         scroll.show()
 
+        # One viewport holds all three tab bodies; only the active one is
+        # visible (see _show_sidebar_tab). Challenges start populated with
+        # starter prompts; Reflections and Annotations fill in once an
+        # activity is generated (_update_sidebar_learning).
+        stack = Gtk.VBox(spacing=style.zoom(8))
+        scroll.add_with_viewport(stack)
+        stack.show()
+
         self._sidebar_challenge_box = Gtk.VBox(spacing=style.zoom(8))
-        self._sidebar_challenge_box.set_border_width(style.zoom(2))
-        scroll.add_with_viewport(self._sidebar_challenge_box)
-        self._sidebar_challenge_box.show()
+        self._sidebar_reflection_box = Gtk.VBox(spacing=style.zoom(8))
+        self._sidebar_annotation_box = Gtk.VBox(spacing=style.zoom(8))
+        self._sidebar_content_boxes = {
+            'challenges': self._sidebar_challenge_box,
+            'reflections': self._sidebar_reflection_box,
+            'annotations': self._sidebar_annotation_box,
+        }
+        for content in self._sidebar_content_boxes.values():
+            content.set_border_width(style.zoom(2))
+            stack.pack_start(content, False, False, 0)
 
         challenges = [
             _('Rename the activity title in your own words.'),
@@ -4689,9 +4710,55 @@ class CreateAIActivityPanel(Gtk.EventBox):
         for index, text in enumerate(challenges):
             self._sidebar_challenge_box.pack_start(
                 self._create_challenge_card(text, index), False, False, 0)
+        self._fill_sidebar_box(
+            self._sidebar_reflection_box, [],
+            _('Reflections appear here once your activity is generated.'))
+        self._fill_sidebar_box(
+            self._sidebar_annotation_box, [],
+            _('Annotations appear here once your activity is generated.'))
 
+        self._show_sidebar_tab('challenges')
         panel.show()
         return panel
+
+    def __sidebar_tab_clicked_cb(self, button, key):
+        self._show_sidebar_tab(key)
+
+    def _show_sidebar_tab(self, key):
+        """Show one learning-sidebar tab body and mark its button active."""
+        for name, content in self._sidebar_content_boxes.items():
+            if name == key:
+                content.set_no_show_all(False)
+                content.show_all()
+            else:
+                content.hide()
+                content.set_no_show_all(True)
+        for name, tab in self._sidebar_tab_buttons.items():
+            ctx = tab.get_style_context()
+            if name == key:
+                ctx.add_class('create-ai-sidebar-tab-active')
+            else:
+                ctx.remove_class('create-ai-sidebar-tab-active')
+
+    def _fill_sidebar_box(self, content, cards, empty_text):
+        """Replace a tab body's contents with cards, or a placeholder note."""
+        if content is None:
+            return
+        for child in content.get_children():
+            content.remove(child)
+        if cards:
+            for card in cards:
+                content.pack_start(card, False, False, 0)
+        else:
+            placeholder = Gtk.Label(empty_text)
+            placeholder.get_style_context().add_class('create-ai-meta-note')
+            placeholder.set_xalign(0)
+            placeholder.set_line_wrap(True)
+            placeholder.set_max_width_chars(26)
+            content.pack_start(placeholder, False, False, 0)
+        # Re-show only if this tab is the active (visible) one.
+        if not content.get_no_show_all():
+            content.show_all()
 
     def _create_sidebar_refinement_card(self):
         card = Gtk.EventBox()
@@ -4856,6 +4923,139 @@ class CreateAIActivityPanel(Gtk.EventBox):
 
         card.show()
         return card
+
+    def _create_reflection_card(self, reflection, index=0):
+        """A reflection prompt card with a collapsible 'Why?' explanation."""
+        accent = self._CHALLENGE_ACCENTS[index % len(self._CHALLENGE_ACCENTS)]
+        card = Gtk.EventBox()
+        card.get_style_context().add_class('create-ai-challenge-card')
+        card.get_style_context().add_class(
+            'create-ai-challenge-c%d' % (index % len(self._CHALLENGE_ACCENTS)))
+
+        box = Gtk.VBox(spacing=style.zoom(6))
+        box.set_border_width(style.zoom(10))
+        card.add(box)
+
+        title = Gtk.Label()
+        title.set_markup(
+            '<span weight="bold" foreground="%s">%s</span>' %
+            (accent, _('Reflect')))
+        title.get_style_context().add_class('create-ai-meta-label')
+        title.set_xalign(0)
+        box.pack_start(title, False, False, 0)
+
+        body = Gtk.Label(reflection.get('question', ''))
+        body.get_style_context().add_class('create-ai-studio-note-label')
+        body.set_xalign(0)
+        body.set_line_wrap(True)
+        body.set_max_width_chars(24)
+        box.pack_start(body, False, False, 0)
+
+        why = (reflection.get('why') or '').strip()
+        if why:
+            why_label = Gtk.Label(why)
+            why_label.get_style_context().add_class('create-ai-meta-note')
+            why_label.set_xalign(0)
+            why_label.set_line_wrap(True)
+            why_label.set_max_width_chars(24)
+            why_label.set_no_show_all(True)
+            toggle = Gtk.Button.new_with_label(_('Why?'))
+            toggle.set_relief(Gtk.ReliefStyle.NONE)
+            toggle.get_style_context().add_class('create-ai-soft-pill')
+            toggle.connect('clicked', self.__reflection_why_cb, why_label)
+            box.pack_start(toggle, False, False, 0)
+            box.pack_start(why_label, False, False, 0)
+
+        card.show_all()
+        return card
+
+    def __reflection_why_cb(self, button, why_label):
+        if why_label.get_visible():
+            why_label.hide()
+        else:
+            why_label.show()
+
+    def _create_annotation_card(self, section, index=0):
+        """An annotation card: section title, line range, plain explanation."""
+        accent = self._CHALLENGE_ACCENTS[index % len(self._CHALLENGE_ACCENTS)]
+        card = Gtk.EventBox()
+        card.get_style_context().add_class('create-ai-challenge-card')
+        card.get_style_context().add_class(
+            'create-ai-challenge-c%d' % (index % len(self._CHALLENGE_ACCENTS)))
+
+        box = Gtk.VBox(spacing=style.zoom(6))
+        box.set_border_width(style.zoom(10))
+        card.add(box)
+
+        title = Gtk.Label()
+        title.set_markup(
+            '<span weight="bold" foreground="%s">%s</span>' %
+            (accent, GLib.markup_escape_text(section.get('title', ''))))
+        title.get_style_context().add_class('create-ai-meta-label')
+        title.set_xalign(0)
+        box.pack_start(title, False, False, 0)
+
+        start = section.get('line_start')
+        end = section.get('line_end')
+        if start and end and end != start:
+            lines = _('lines %(start)d–%(end)d') % {'start': start, 'end': end}
+        elif start:
+            lines = _('line %d') % start
+        else:
+            lines = ''
+        if lines:
+            line_label = Gtk.Label(lines)
+            line_label.get_style_context().add_class('create-ai-meta-note')
+            line_label.set_xalign(0)
+            box.pack_start(line_label, False, False, 0)
+
+        body = Gtk.Label(section.get('explanation', ''))
+        body.get_style_context().add_class('create-ai-studio-note-label')
+        body.set_xalign(0)
+        body.set_line_wrap(True)
+        body.set_max_width_chars(24)
+        box.pack_start(body, False, False, 0)
+
+        card.show_all()
+        return card
+
+    def _update_sidebar_learning(self, result, plan, previous_source=''):
+        """Fill the Reflections and Annotations tabs from the generated source.
+
+        When ``previous_source`` differs (a refinement), lead Reflections with
+        prompts about what the learner just changed.
+        """
+        if self._sidebar_reflection_box is None:
+            return
+
+        source = ''
+        files = getattr(result, 'files', None)
+        if isinstance(files, dict):
+            source = files.get('activity.py', '') or ''
+
+        try:
+            from generation.reflect import (analyze_source,
+                                            reflections_for_change)
+            analysis = analyze_source(source, plan)
+            change_prompts = (
+                reflections_for_change(previous_source, source)
+                if previous_source and previous_source != source else [])
+        except Exception:
+            logging.exception('Learning-sidebar analysis failed')
+            analysis = {'sections': [], 'reflections': []}
+            change_prompts = []
+
+        reflections = change_prompts + analysis['reflections']
+        self._fill_sidebar_box(
+            self._sidebar_reflection_box,
+            [self._create_reflection_card(reflection, index)
+             for index, reflection in enumerate(reflections)],
+            _('No reflection prompts for this activity yet.'))
+        self._fill_sidebar_box(
+            self._sidebar_annotation_box,
+            [self._create_annotation_card(section, index)
+             for index, section in enumerate(analysis['sections'])],
+            _('No annotations for this activity yet.'))
 
     def _create_studio_tab(self, label, active):
         button = Gtk.Button.new_with_label(label)
@@ -8977,6 +9177,7 @@ if clipboard.wait_is_text_available():
         """
         self._detach_generation_job()
         self._finish_generation_steps()
+        previous_result = self._generation_result
         self._generation_result = result
         self._review_generation_context = {}
         self._review_draft_was_shown = False
@@ -9028,6 +9229,12 @@ if clipboard.wait_is_text_available():
                 _('Generated. Type another prompt here to refine '
                   'this activity.'))
         self._update_sidebar_challenges(result, plan)
+        previous_source = ''
+        if announce and previous_result is not None:
+            prev_files = getattr(previous_result, 'files', None)
+            if isinstance(prev_files, dict):
+                previous_source = prev_files.get('activity.py', '') or ''
+        self._update_sidebar_learning(result, plan, previous_source)
         return False
 
     # Sparky speaks with a little variety so it never feels canned.

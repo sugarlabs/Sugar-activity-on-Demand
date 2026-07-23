@@ -572,6 +572,76 @@ print('OFFSCREEN-STEPS-OK')
 '''
 
 
+_OFFSCREEN_LEARNING_SCRIPT = '''
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk
+
+from ui.panel import CreateAIActivityPanel
+from core.spec import ActivitySpec
+from generation.generator import enrich_plan
+from generation.templates import render_activity_source
+
+
+def pump():
+    while Gtk.events_pending():
+        Gtk.main_iteration_do(False)
+
+
+class FakeResult:
+    def __init__(self, source, plan, spec):
+        self.files = {'activity.py': source}
+        self.plan = plan
+        self.spec = spec
+        self.provider = 'fake'
+        self.model = 'fake-1'
+        self.project_path = '/tmp/aod-fake'
+
+
+window = Gtk.OffscreenWindow()
+panel = CreateAIActivityPanel()
+window.add(panel)
+window.show_all()
+panel.reset_view()
+pump()
+
+assert panel._sidebar_reflection_box is not None
+assert panel._sidebar_annotation_box is not None
+assert set(panel._sidebar_tab_buttons) == {
+    'challenges', 'reflections', 'annotations'}
+
+spec = ActivitySpec('Fraction Quest', 'Make a fractions quiz.',
+                    'logic_math', 'MIT')
+plan = enrich_plan(spec, {'template': 'quiz', 'summary': 's',
+                          'learner_goal': 'g',
+                          'learner_steps': ['a', 'b', 'c']})
+source = render_activity_source(spec, plan)
+
+panel._update_sidebar_learning(FakeResult(source, plan, spec), plan)
+pump()
+refl = panel._sidebar_reflection_box.get_children()
+anno = panel._sidebar_annotation_box.get_children()
+assert len(refl) >= 4, 'reflection cards: %d' % len(refl)
+assert len(anno) >= 5, 'annotation cards: %d' % len(anno)
+
+panel._show_sidebar_tab('reflections')
+pump()
+assert panel._sidebar_reflection_box.get_visible()
+assert not panel._sidebar_challenge_box.get_visible()
+
+new_source = source.replace('Fraction Quest', 'Fraction Adventure')
+panel._update_sidebar_learning(
+    FakeResult(new_source, plan, spec), plan, source)
+pump()
+assert len(panel._sidebar_reflection_box.get_children()) > len(refl)
+
+# Destroy the panel first: see the note in _OFFSCREEN_SCRIPT above.
+panel.destroy()
+window.destroy()
+print('OFFSCREEN-LEARNING-OK')
+'''
+
+
 @unittest.skipUnless(
     _gtk_display_available(), 'needs a usable display server')
 class TestStudioOffscreen(unittest.TestCase):
@@ -633,6 +703,14 @@ class TestStudioOffscreen(unittest.TestCase):
             'offscreen guided test failed:\n%s%s'
             % (completed.stdout, completed.stderr))
         self.assertIn('OFFSCREEN-GUIDED-OK', completed.stdout)
+
+    def test_learning_sidebar_populates_and_switches_tabs(self):
+        completed = self._run_offscreen(_OFFSCREEN_LEARNING_SCRIPT)
+        self.assertEqual(
+            0, completed.returncode,
+            'offscreen learning-sidebar test failed:\n%s%s'
+            % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-LEARNING-OK', completed.stdout)
 
     def test_guided_flow_triggers_on_send_and_studio_fills(self):
         completed = self._run_offscreen(_OFFSCREEN_GUIDED_TRIGGER_SCRIPT)
