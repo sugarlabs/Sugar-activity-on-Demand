@@ -160,12 +160,109 @@ _GLYPHS = {
         'C27.5 21 28 16 33 16 C43 16 45 32 27.5 45 Z" ' + _SF
         + ' stroke-width="3" stroke-linejoin="round"/>\n'
     ),
-    'default': (
+    'book': (
+        '    <rect x="14" y="10" width="27" height="35" rx="3" '
+        + _SF + ' stroke-width="3"/>\n'
+        '    <path d="M20 10 L20 45" fill="none" ' + _S
+        + ' stroke-width="3"/>\n'
+        '    <path d="M26 19 H37 M26 26 H37 M26 33 H33" fill="none" '
+        + _S + ' stroke-width="2.5" stroke-linecap="round"/>\n'
+    ),
+    'pencil': (
+        '    <path d="M14 41 L16 33 L36 13 L42 19 L22 39 Z" '
+        + _SF + ' stroke-width="3" stroke-linejoin="round"/>\n'
+        '    <path d="M33 16 L39 22" fill="none" ' + _S
+        + ' stroke-width="3"/>\n'
+        '    <path d="M15 40 L21 38" fill="none" ' + _S
+        + ' stroke-width="2.5" stroke-linecap="round"/>\n'
+    ),
+    'palette': (
+        '    <path d="M27.5 10 C40 10 46 18 46 27 C46 33 41 34 37 34 '
+        'C33 34 33 39 30 41 C28 42 27.5 43 25 43 C16 43 9 36 9 27 '
+        'C9 17 16 10 27.5 10 Z" ' + _SF
+        + ' stroke-width="3" stroke-linejoin="round"/>\n'
+        '    <circle cx="20" cy="23" r="2.5" fill="&stroke_color;"/>\n'
+        '    <circle cx="29" cy="18" r="2.5" fill="&stroke_color;"/>\n'
+        '    <circle cx="37" cy="23" r="2.5" fill="&stroke_color;"/>\n'
+    ),
+    'globe': (
         '    <circle cx="27.5" cy="27.5" r="18" ' + _SF
-        + ' stroke-width="3.5"/>\n'
-        '    <path d="M18 28 L25 35 L38 20" fill="none" '
-        + _S + ' stroke-width="4" stroke-linecap="round" '
-        'stroke-linejoin="round"/>\n'
+        + ' stroke-width="3"/>\n'
+        '    <path d="M9.5 27.5 H45.5 M27.5 9.5 V45.5" fill="none" '
+        + _S + ' stroke-width="2"/>\n'
+        '    <path d="M27.5 9.5 Q15 27.5 27.5 45.5 Q40 27.5 27.5 9.5" '
+        'fill="none" ' + _S + ' stroke-width="2"/>\n'
+    ),
+    'leaf': (
+        '    <path d="M13 42 Q13 15 42 13 Q40 42 13 42 Z" '
+        + _SF + ' stroke-width="3" stroke-linejoin="round"/>\n'
+        '    <path d="M14 41 Q27 28 40 20" fill="none" ' + _S
+        + ' stroke-width="2.5" stroke-linecap="round"/>\n'
+    ),
+    'sun': (
+        '    <circle cx="27.5" cy="27.5" r="9" ' + _SF
+        + ' stroke-width="3"/>\n'
+        '    <path d="M27.5 6 V13 M27.5 42 V49 M6 27.5 H13 M42 27.5 H49 '
+        'M12 12 L17 17 M38 38 L43 43 M43 12 L38 17 M17 38 L12 43" '
+        'fill="none" ' + _S + ' stroke-width="3" '
+        'stroke-linecap="round"/>\n'
+    ),
+    'drop': (
+        '    <path d="M27.5 8 C27.5 8 40 24 40 34 A12.5 12.5 0 0 1 15 34 '
+        'C15 24 27.5 8 27.5 8 Z" ' + _SF
+        + ' stroke-width="3" stroke-linejoin="round"/>\n'
+        '    <path d="M22 34 A6 6 0 0 0 28 40" fill="none" ' + _S
+        + ' stroke-width="2.5" stroke-linecap="round"/>\n'
+    ),
+    'paw': (
+        '    <ellipse cx="27.5" cy="35" rx="10" ry="8" ' + _SF
+        + ' stroke-width="3"/>\n'
+        '    <circle cx="15" cy="25" r="4" ' + _SF
+        + ' stroke-width="2.5"/>\n'
+        '    <circle cx="23" cy="17" r="4" ' + _SF
+        + ' stroke-width="2.5"/>\n'
+        '    <circle cx="32" cy="17" r="4" ' + _SF
+        + ' stroke-width="2.5"/>\n'
+        '    <circle cx="40" cy="25" r="4" ' + _SF
+        + ' stroke-width="2.5"/>\n'
+    ),
+    'ball': (
+        '    <circle cx="27.5" cy="27.5" r="18" ' + _SF
+        + ' stroke-width="3"/>\n'
+        '    <path d="M27.5 17 L36 23 L33 34 L22 34 L19 23 Z" '
+        'fill="&stroke_color;"/>\n'
+        '    <path d="M27.5 9.5 V17 M36 23 L44 20 M33 34 L39 41 '
+        'M22 34 L16 41 M19 23 L11 20" fill="none" ' + _S
+        + ' stroke-width="2"/>\n'
+    ),
+    'dice': (
+        '    <rect x="12" y="12" width="31" height="31" rx="5" '
+        + _SF + ' stroke-width="3"/>\n'
+        '    <circle cx="21" cy="21" r="2.5" fill="&stroke_color;"/>\n'
+        '    <circle cx="34" cy="21" r="2.5" fill="&stroke_color;"/>\n'
+        '    <circle cx="27.5" cy="27.5" r="2.5" fill="&stroke_color;"/>\n'
+        '    <circle cx="21" cy="34" r="2.5" fill="&stroke_color;"/>\n'
+        '    <circle cx="34" cy="34" r="2.5" fill="&stroke_color;"/>\n'
+    ),
+    'robot': (
+        '    <rect x="14" y="18" width="27" height="24" rx="4" '
+        + _SF + ' stroke-width="3"/>\n'
+        '    <path d="M27.5 10 V18" fill="none" ' + _S
+        + ' stroke-width="3"/>\n'
+        '    <circle cx="27.5" cy="9" r="3" fill="&stroke_color;"/>\n'
+        '    <circle cx="22" cy="28" r="3" fill="&stroke_color;"/>\n'
+        '    <circle cx="33" cy="28" r="3" fill="&stroke_color;"/>\n'
+        '    <path d="M22 36 H33" fill="none" ' + _S
+        + ' stroke-width="2.5" stroke-linecap="round"/>\n'
+    ),
+    # The universal fallback: a lightbulb, because every activity starts as
+    # an idea.  Friendlier and more on-theme than a bare checkmark.
+    'default': (
+        '    <path d="M27.5 8 A14 14 0 0 1 36 33 Q33 36 33 40 L22 40 '
+        'Q22 36 19 33 A14 14 0 0 1 27.5 8 Z" ' + _SF
+        + ' stroke-width="3" stroke-linejoin="round"/>\n'
+        '    <path d="M23 44 H32 M25 47 H30" fill="none" ' + _S
+        + ' stroke-width="2.5" stroke-linecap="round"/>\n'
     ),
 }
 
@@ -184,6 +281,27 @@ _KEYWORD_GLYPHS = (
                 'rhythm', 'piano'}), 'music'),
     (frozenset({'heart', 'hearts', 'health', 'feeling', 'feelings',
                 'emotion', 'emotions'}), 'heart'),
+    (frozenset({'read', 'reading', 'book', 'books', 'library',
+                'chapter', 'novel'}), 'book'),
+    (frozenset({'write', 'writing', 'writer', 'spell', 'spelling',
+                'handwriting', 'essay', 'sentence', 'sentences'}), 'pencil'),
+    (frozenset({'paint', 'painting', 'art', 'artist', 'palette',
+                'colour', 'colours', 'color', 'colors'}), 'palette'),
+    (frozenset({'globe', 'world', 'earth', 'map', 'maps', 'geography',
+                'country', 'countries', 'continent', 'continents'}), 'globe'),
+    (frozenset({'tree', 'trees', 'leaf', 'leaves', 'forest', 'nature',
+                'jungle', 'woods'}), 'leaf'),
+    (frozenset({'sun', 'sunny', 'weather', 'sky', 'summer', 'sunshine',
+                'daylight'}), 'sun'),
+    (frozenset({'water', 'rain', 'ocean', 'sea', 'river', 'lake',
+                'drop', 'droplet', 'wave', 'waves'}), 'drop'),
+    (frozenset({'animal', 'animals', 'pet', 'pets', 'cat', 'cats',
+                'dog', 'dogs', 'paw', 'paws', 'zoo', 'wildlife'}), 'paw'),
+    (frozenset({'sport', 'sports', 'soccer', 'football', 'ball',
+                'basketball'}), 'ball'),
+    (frozenset({'dice', 'die', 'random', 'roll', 'luck', 'chance'}), 'dice'),
+    (frozenset({'robot', 'robots', 'machine', 'coding', 'code',
+                'program', 'programming', 'algorithm', 'computer'}), 'robot'),
 )
 
 _CATEGORY_GLYPHS = {

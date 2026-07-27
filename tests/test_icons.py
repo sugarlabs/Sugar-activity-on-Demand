@@ -88,7 +88,7 @@ class TestActivityIcons(unittest.TestCase):
     def test_concept_keyword_matches_whole_words_only(self):
         from generation.icons import _concept_glyph
         # "Start" must NOT trip the "star" concept glyph.
-        self.assertIsNone(_concept_glyph({'name': 'Start Writing'}))
+        self.assertIsNone(_concept_glyph({'name': 'Start Over'}))
         self.assertEqual('star', _concept_glyph({'name': 'Star Map'}))
         self.assertEqual(
             'rocket',
@@ -102,6 +102,39 @@ class TestActivityIcons(unittest.TestCase):
         # New concept glyphs are still valid, colorizable Sugar icons.
         self.assertIsNotNone(sanitize_icon_svg(svg))
         self.assertIn('viewBox="0 0 55 55"', svg)
+
+    def test_new_concept_glyphs_resolve(self):
+        from generation.icons import _concept_glyph
+        cases = {
+            'Read Along': 'book',
+            'Spelling Bee': 'pencil',
+            'Paint Studio': 'palette',
+            'World Map Quiz': 'globe',
+            'Forest Walk': 'leaf',
+            'Sunny Weather': 'sun',
+            'Ocean Explorer': 'drop',
+            'My Pet Dog': 'paw',
+            'Soccer Scores': 'ball',
+            'Roll the Dice': 'dice',
+            'Robot Coding': 'robot',
+        }
+        for name, glyph in cases.items():
+            self.assertEqual(glyph, _concept_glyph({'name': name}), name)
+
+    def test_every_glyph_is_a_sanitizable_icon(self):
+        # Each glyph, once wrapped by the template, must survive the same
+        # sanitizer the model-drawn icons pass through.
+        from generation.icons import _GLYPHS
+        for glyph_key in _GLYPHS:
+            svg = render_activity_icon(
+                {'name': 'Sample', 'template': glyph_key})
+            self.assertIsNotNone(
+                sanitize_icon_svg(svg), 'glyph %r did not sanitize' % glyph_key)
+
+    def test_default_glyph_changed_from_checkmark(self):
+        # Unmatched activities now get the lightbulb, not a bare checkmark.
+        svg = render_activity_icon({'name': 'Whatsit', 'template': 'nope'})
+        self.assertIsNotNone(sanitize_icon_svg(svg))
 
 
 class TestSanitizeIconSvg(unittest.TestCase):
