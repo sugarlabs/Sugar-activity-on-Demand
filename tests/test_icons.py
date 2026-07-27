@@ -135,6 +135,9 @@ class TestActivityIcons(unittest.TestCase):
         # Unmatched activities now get the lightbulb, not a bare checkmark.
         svg = render_activity_icon({'name': 'Whatsit', 'template': 'nope'})
         self.assertIsNotNone(sanitize_icon_svg(svg))
+        # The bulb base is present, and the old checkmark path is gone.
+        self.assertIn('M23 44 H32', svg)
+        self.assertNotIn('M18 28 L25 35 L38 20', svg)
 
 
 class TestSanitizeIconSvg(unittest.TestCase):
