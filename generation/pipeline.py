@@ -376,6 +376,9 @@ def generate_activity(spec, output_root=None, provider=None,
     # deterministic glyph is only the last resort: no provider is configured
     # at all, or every model attempt failed sanitization.
     if not plan.get('icon_svg'):
+        # Deterministic glyph is the default; upgrade to 'ai' only when a
+        # drawing-capable provider returns a usable icon.
+        plan['icon_source'] = 'generated'
         icon_provider = _resolve_icon_provider(selected_provider)
         if icon_provider is not None:
             progress.report('generating', 0.72,
@@ -384,10 +387,6 @@ def generate_activity(spec, output_root=None, provider=None,
             if icon_svg:
                 plan['icon_svg'] = icon_svg
                 plan['icon_source'] = 'ai'
-            else:
-                plan['icon_source'] = 'generated'
-        else:
-            plan['icon_source'] = 'generated'
 
     progress.report('generating', 0.74,
                     'Expanding the plan into activity screens')
