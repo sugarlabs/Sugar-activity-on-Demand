@@ -9550,19 +9550,24 @@ if clipboard.wait_is_text_available():
         return bundle_path
 
     def _prompt_and_apply_license(self, action_label):
-        """Ask which license to bundle with, then apply it to the result.
+        """Confirm the activity name and license before bundling.
 
-        Returns True when the learner confirms and the license is applied,
-        False when they cancel or the update fails.
+        Shows one dialog that lets the learner name their activity (the name
+        the Sugar shell will show) and choose the license to bundle with,
+        then applies both to the generated result.
+
+        Returns True when the learner confirms and both are applied, False
+        when they cancel or an update fails.
         """
         if self._generation_result is None:
             return False
 
         options = self._get_license_options()
         current = self._selected_options.get('license', 'mit')
+        current_name = self._generation_result.spec.name or ''
 
         dialog = Gtk.Dialog(
-            title=_('Choose a license'),
+            title=_('Name your activity'),
             transient_for=self.get_toplevel(),
             modal=True,
         )
@@ -9574,11 +9579,28 @@ if clipboard.wait_is_text_available():
         content.set_border_width(style.zoom(12))
         content.set_spacing(style.zoom(6))
 
-        heading = Gtk.Label(
+        name_heading = Gtk.Label(_('Name your activity'))
+        name_heading.set_xalign(0)
+        content.pack_start(name_heading, False, False, 0)
+        name_heading.show()
+
+        name_entry = Gtk.Entry()
+        name_entry.set_text(current_name)
+        name_entry.set_max_length(80)
+        name_entry.set_placeholder_text(_('Activity name'))
+        # Pressing Enter confirms the dialog, and pre-selecting the text lets
+        # the learner retype a fresh name in one keystroke.
+        name_entry.set_activates_default(True)
+        name_entry.select_region(0, -1)
+        content.pack_start(name_entry, False, False, 0)
+        name_entry.show()
+
+        license_heading = Gtk.Label(
             _('Pick the license to bundle with this activity.'))
-        heading.set_xalign(0)
-        content.pack_start(heading, False, False, 0)
-        heading.show()
+        license_heading.set_xalign(0)
+        license_heading.set_margin_top(style.zoom(10))
+        content.pack_start(license_heading, False, False, 0)
+        license_heading.show()
 
         buttons = []
         group = None
@@ -9593,16 +9615,36 @@ if clipboard.wait_is_text_available():
             radio.show()
             buttons.append((option['value'], radio))
 
+        name_entry.grab_focus()
         response = dialog.run()
         selected = current
         for value, radio in buttons:
             if radio.get_active():
                 selected = value
                 break
+        chosen_name = name_entry.get_text()
         dialog.destroy()
 
         if response != Gtk.ResponseType.ACCEPT:
             return False
+
+        from generation.pipeline import rename_generation_result
+
+        try:
+            rename_generation_result(self._generation_result, chosen_name)
+        except Exception as error:
+            logging.exception('Could not rename the activity')
+            if self._prompt_status_label is not None:
+                self._prompt_status_label.set_text(_('Rename failed'))
+            self._append_chat_message(_('Rename failed: %s') % error)
+            return False
+
+        applied_name = self._generation_result.spec.name
+        if applied_name != current_name:
+            self._append_chat_status(
+                _('Activity named "%s".') % applied_name)
+            if self._preview_empty_title is not None:
+                self._preview_empty_title.set_text(applied_name)
 
         self._selected_options['license'] = selected
 

@@ -829,6 +829,27 @@ def apply_license_to_project(project_path, spec, plan):
     return read_project_files(project_path)
 
 
+def apply_name_to_project(project_path, spec, plan):
+    """Rewrite the on-disk artifacts that carry the display name.
+
+    The learner can rename the activity at install/export time.  The name
+    the Sugar shell shows comes from ``activity.info``, and the README
+    opens with it, so both are re-rendered from ``spec.name``/``plan``.
+    The bundle_id and project directory are deliberately left untouched so
+    the activity keeps its identity and refinement lineage across a rename.
+    Returns the refreshed project file mapping.
+    """
+    info_path = os.path.join(project_path, 'activity', 'activity.info')
+    with open(info_path, 'w', encoding='utf-8') as info_file:
+        info_file.write(_render_activity_info(spec, plan))
+
+    readme_path = os.path.join(project_path, 'README.md')
+    with open(readme_path, 'w', encoding='utf-8') as readme_file:
+        readme_file.write(_render_readme(spec, plan))
+
+    return read_project_files(project_path)
+
+
 # Two-student board activities seat a partner; everything else is single-user.
 _MULTI_PARTICIPANT_TEMPLATES = ('chess', 'carrom')
 

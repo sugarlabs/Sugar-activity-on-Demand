@@ -419,6 +419,67 @@ class TestAodGenerator(unittest.TestCase):
             self.assertIn('BSD 3-Clause License', license_file.read())
         self.assertTrue(validate_project(result.project_path).valid)
 
+    def test_rename_result_rewrites_name_artifacts(self):
+        from generation.pipeline import rename_generation_result
+
+        spec = ActivitySpec(
+            'Space Racer',
+            'Make a space racing game.',
+            'games',
+            'MIT',
+            template='grid',
+        )
+        result = create_prototype_activity(spec, self.output_root)
+        self.assertIn(
+            'name = Space Racer', result.files['activity/activity.info'])
+        self.assertTrue(os.path.isfile(result.bundle_path))
+        original_bundle_id = result.bundle_id
+        original_path = result.project_path
+
+        rename_generation_result(result, 'Galaxy Quest')
+
+        # Spec, plan, and on-disk artifacts all carry the new display name.
+        self.assertEqual('Galaxy Quest', result.spec.name)
+        self.assertEqual('Galaxy Quest', result.plan['name'])
+        self.assertIn(
+            'name = Galaxy Quest', result.files['activity/activity.info'])
+        self.assertTrue(result.files['README.md'].startswith('# Galaxy Quest'))
+        with open(os.path.join(result.project_path, 'aod_plan.json'),
+                  encoding='utf-8') as plan_file:
+            self.assertEqual('Galaxy Quest', json.load(plan_file)['name'])
+
+        # Identity and lineage are preserved: bundle_id and directory stay put,
+        # and the built bundle is invalidated so packaging picks up the name.
+        self.assertEqual(original_bundle_id, result.bundle_id)
+        self.assertEqual(original_bundle_id, result.plan['bundle_id'])
+        self.assertEqual(original_path, result.project_path)
+        self.assertEqual('', result.bundle_path)
+        self.assertTrue(validate_project(result.project_path).valid)
+
+    def test_rename_result_is_a_noop_for_blank_or_same_name(self):
+        from generation.pipeline import rename_generation_result
+
+        spec = ActivitySpec(
+            'Keep This Name',
+            'Make a counting game.',
+            'logic_math',
+            'MIT',
+            template='grid',
+        )
+        result = create_prototype_activity(spec, self.output_root)
+        built_bundle = result.bundle_path
+        self.assertTrue(os.path.isfile(built_bundle))
+
+        # A blank name, or the same name, leaves the result (and its bundle)
+        # untouched instead of needlessly repackaging.
+        rename_generation_result(result, '   ')
+        self.assertEqual('Keep This Name', result.spec.name)
+        self.assertEqual(built_bundle, result.bundle_path)
+
+        rename_generation_result(result, 'Keep This Name')
+        self.assertEqual('Keep This Name', result.spec.name)
+        self.assertEqual(built_bundle, result.bundle_path)
+
 
 class TestActivityInfoMetadata(unittest.TestCase):
 

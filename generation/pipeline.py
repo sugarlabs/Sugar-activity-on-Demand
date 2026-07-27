@@ -17,6 +17,7 @@ from llm.enhance import enhance_prompt
 from llm.enhance import needs_enhancement
 from generation.codegen import build_codegen_user_prompt
 from generation.generator import apply_license_to_project
+from generation.generator import apply_name_to_project
 from generation.generator import build_plan
 from generation.generator import create_prototype_activity
 from generation.generator import enrich_plan
@@ -431,6 +432,35 @@ def reapply_generation_license(result, license_id):
     source = result.files.get('activity.py', '')
     if source:
         result.plan['source_hash'] = _source_hash(source)
+    plan_path = os.path.join(result.project_path, 'aod_plan.json')
+    with open(plan_path, 'w', encoding='utf-8') as plan_file:
+        json.dump(result.plan, plan_file, indent=2, sort_keys=True)
+        plan_file.write('\n')
+    result.files = read_project_files(result.project_path)
+    result.bundle_path = ''
+    return result
+
+
+def rename_generation_result(result, new_name):
+    """Rename a generated activity before packaging.
+
+    Updates the spec and plan display name, rewrites the on-disk artifacts
+    that carry it (``activity.info`` and the README), refreshes the plan
+    file and the in-memory file mapping, and invalidates any built bundle so
+    the next :func:`package_generation_result` repackages under the new name.
+
+    A blank or unchanged name is a no-op.  The bundle_id, project directory,
+    and source hash are left untouched: renaming the label does not change
+    the activity's identity or its refinement lineage.
+    """
+    normalized = ' '.join(str(new_name or '').split())[:80]
+    if not normalized or normalized == (result.spec.name or ''):
+        return result
+
+    result.spec = replace(result.spec, name=normalized)
+    result.plan['name'] = normalized
+    result.files = apply_name_to_project(
+        result.project_path, result.spec, result.plan)
     plan_path = os.path.join(result.project_path, 'aod_plan.json')
     with open(plan_path, 'w', encoding='utf-8') as plan_file:
         json.dump(result.plan, plan_file, indent=2, sort_keys=True)
