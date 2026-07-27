@@ -9549,7 +9549,7 @@ if clipboard.wait_is_text_available():
                 _('XO packaged for export or install.'))
         return bundle_path
 
-    def _prompt_and_apply_license(self, action_label):
+    def _prompt_and_apply_name_and_license(self, action_label):
         """Confirm the activity name and license before bundling.
 
         Shows one dialog that lets the learner name their activity (the name
@@ -9673,7 +9673,7 @@ if clipboard.wait_is_text_available():
                 self._prompt_status_label.set_text(_('Generate first'))
             return
 
-        if not self._prompt_and_apply_license(_('Export')):
+        if not self._prompt_and_apply_name_and_license(_('Export')):
             return
 
         try:
@@ -9729,7 +9729,7 @@ if clipboard.wait_is_text_available():
                 self._prompt_status_label.set_text(_('Packaging Flatpak...'))
             return
 
-        if not self._prompt_and_apply_license(_('Export')):
+        if not self._prompt_and_apply_name_and_license(_('Export')):
             return
 
         # Packaging can invoke flatpak-builder, which may run for many
@@ -9841,7 +9841,7 @@ if clipboard.wait_is_text_available():
                 self._prompt_status_label.set_text(_('Generate first'))
             return
 
-        if not self._prompt_and_apply_license(_('Install & Open')):
+        if not self._prompt_and_apply_name_and_license(_('Install & Open')):
             return
 
         from sugar3.bundle.activitybundle import ActivityBundle

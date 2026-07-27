@@ -459,13 +459,14 @@ def rename_generation_result(result, new_name):
 
     result.spec = replace(result.spec, name=normalized)
     result.plan['name'] = normalized
-    result.files = apply_name_to_project(
-        result.project_path, result.spec, result.plan)
     plan_path = os.path.join(result.project_path, 'aod_plan.json')
     with open(plan_path, 'w', encoding='utf-8') as plan_file:
         json.dump(result.plan, plan_file, indent=2, sort_keys=True)
         plan_file.write('\n')
-    result.files = read_project_files(result.project_path)
+    # apply_name_to_project re-reads the project, so write the plan first to
+    # capture it in the refreshed file mapping in a single pass.
+    result.files = apply_name_to_project(
+        result.project_path, result.spec, result.plan)
     result.bundle_path = ''
     return result
 
