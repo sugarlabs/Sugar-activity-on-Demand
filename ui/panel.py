@@ -9849,6 +9849,8 @@ if clipboard.wait_is_text_available():
         try:
             bundle_path = self._ensure_generation_bundle()
             install_path = ActivityBundle(bundle_path).install()
+            self._remove_stale_installs(
+                self._generation_result.bundle_id, install_path)
             try:
                 subprocess.Popen(['sugar-activity3'], cwd=install_path)
             except FileNotFoundError:
@@ -9871,6 +9873,47 @@ if clipboard.wait_is_text_available():
             _('Activity installed'), install_path,
             note=_('Opened with sugar-activity3. You can also launch it '
                    'from the Sugar home view.'))
+
+    @staticmethod
+    def _remove_stale_installs(bundle_id, keep_path):
+        """Remove older installs of this activity left under a former name.
+
+        Renaming changes the bundle directory (the zip root is derived
+        from the display name) but not the bundle_id, and
+        ActivityBundle.install() never removes the previous copy.  Two
+        installed directories then share one bundle_id and the Sugar
+        shell can keep resolving the stale one -- the new name "does
+        not stay".  Fail-soft: an unreadable entry is skipped.
+        """
+        if not bundle_id:
+            return
+        from sugar3 import env
+
+        activities_root = env.get_user_activities_path()
+        keep = os.path.realpath(keep_path)
+        try:
+            entries = os.listdir(activities_root)
+        except OSError:
+            return
+        for entry in entries:
+            path = os.path.join(activities_root, entry)
+            if os.path.realpath(path) == keep or not os.path.isdir(path):
+                continue
+            info_path = os.path.join(path, 'activity', 'activity.info')
+            try:
+                with open(info_path, encoding='utf-8') as info_file:
+                    entry_id = next(
+                        (line.split('=', 1)[1].strip()
+                         for line in info_file
+                         if line.split('=', 1)[0].strip() == 'bundle_id'),
+                        None)
+            except (OSError, IndexError):
+                continue
+            if entry_id == bundle_id:
+                shutil.rmtree(path, ignore_errors=True)
+                logging.info(
+                    'Removed stale install %s superseded by %s',
+                    path, keep_path)
 
     def _show_export_result(self, title, path, note=''):
         """Confirm where an exported/installed artifact landed.

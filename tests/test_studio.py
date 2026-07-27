@@ -90,6 +90,47 @@ class TestStudioDecoupling(unittest.TestCase):
                          _clean_generation_error_text('plain message'))
         self.assertEqual('', _clean_generation_error_text(None))
 
+    def test_remove_stale_installs_sweeps_renamed_copies(self):
+        # Renaming changes the install directory but not the bundle_id;
+        # the old copy must go or the shell keeps showing the old name.
+        import shutil
+        import tempfile
+        from unittest import mock
+
+        from ui.panel import CreateAIActivityPanel
+
+        def _fake_install(root, dirname, bundle_id):
+            activity_dir = os.path.join(root, dirname, 'activity')
+            os.makedirs(activity_dir)
+            with open(os.path.join(activity_dir, 'activity.info'), 'w',
+                      encoding='utf-8') as info:
+                info.write('[Activity]\nname = %s\nbundle_id = %s\n'
+                           % (dirname, bundle_id))
+
+        root = tempfile.mkdtemp(prefix='aod-stale-install-')
+        try:
+            _fake_install(root, 'OldName.activity', 'org.example.same')
+            _fake_install(root, 'NewName.activity', 'org.example.same')
+            _fake_install(root, 'Other.activity', 'org.example.other')
+            with mock.patch.dict(os.environ,
+                                 {'SUGAR_ACTIVITIES_PATH': root}):
+                CreateAIActivityPanel._remove_stale_installs(
+                    'org.example.same',
+                    os.path.join(root, 'NewName.activity'))
+            self.assertEqual(
+                ['NewName.activity', 'Other.activity'],
+                sorted(os.listdir(root)))
+            # Without a bundle_id the sweep must not touch anything.
+            with mock.patch.dict(os.environ,
+                                 {'SUGAR_ACTIVITIES_PATH': root}):
+                CreateAIActivityPanel._remove_stale_installs(
+                    '', os.path.join(root, 'NewName.activity'))
+            self.assertEqual(
+                ['NewName.activity', 'Other.activity'],
+                sorted(os.listdir(root)))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
 
 _OFFSCREEN_SCRIPT = '''
 import gi
