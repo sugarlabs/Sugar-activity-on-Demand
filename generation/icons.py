@@ -359,12 +359,36 @@ def sanitize_icon_svg(text):
     return candidate
 
 
+_ICON_RETRY_HINT = (
+    '\n\nYour previous drawing could not be used.  Return ONLY a single '
+    '<svg xmlns="http://www.w3.org/2000/svg" width="55" height="55" '
+    'viewBox="0 0 55 55"> ... </svg> document with no markdown fences and '
+    'no prose.  Use only path, rect, circle, ellipse, line, polyline, '
+    'polygon, and g elements.  Color strictly with &stroke_color; and '
+    '&fill_color; — never literal colors, gradients, filters, text, '
+    'images, or scripts.'
+)
+
+
+def _icon_attempts():
+    """How many times to ask the model to draw before falling back."""
+    try:
+        value = int(os.environ.get('AOD_ICON_ATTEMPTS', '3'))
+    except (TypeError, ValueError):
+        value = 3
+    return max(1, min(value, 5))
+
+
 def request_icon_svg(provider, spec, plan):
     """Ask the model to draw this activity's icon; never raises.
 
-    Returns a sanitized SVG string, or None when the feature is off,
-    the provider cannot draw, or the reply fails sanitization — the
-    caller then falls back to render_activity_icon().
+    Every activity gets an AI-drawn icon when a drawing-capable provider is
+    reachable.  The model is asked up to ``AOD_ICON_ATTEMPTS`` times (default
+    3), because a first reply occasionally trips the SVG sanitizer (a stray
+    gradient, a literal color, a markdown fence); each retry restates the
+    constraints.  Returns a sanitized SVG string, or None when the feature is
+    off, the provider cannot draw, or every attempt fails — only then does the
+    caller fall back to the deterministic render_activity_icon() glyph.
     """
     if os.environ.get('AOD_AI_ICON', 'on').lower() in (
             'off', '0', 'no', 'false'):
@@ -373,24 +397,34 @@ def request_icon_svg(provider, spec, plan):
     if not callable(generate_text):
         return None
 
-    try:
-        response = generate_text(
-            build_icon_system_prompt(),
-            build_icon_user_prompt(spec, plan),
-        )
-    except Exception as error:
-        logging.warning('Icon drawing call failed: %s',
-                        _redact_provider_value(error, provider))
-        return None
+    system_prompt = build_icon_system_prompt()
+    base_user_prompt = build_icon_user_prompt(spec, plan)
+    attempts = _icon_attempts()
 
-    if _contains_provider_secret(response, provider):
-        logging.warning('Model icon contained credential material')
-        return None
+    for attempt in range(1, attempts + 1):
+        user_prompt = base_user_prompt if attempt == 1 else (
+            base_user_prompt + _ICON_RETRY_HINT)
+        try:
+            response = generate_text(system_prompt, user_prompt)
+        except Exception as error:
+            logging.warning('Icon drawing call failed (attempt %d/%d): %s',
+                            attempt, attempts,
+                            _redact_provider_value(error, provider))
+            continue
 
-    icon = sanitize_icon_svg(response)
-    if icon is None:
-        logging.warning('Model icon failed sanitization; using fallback')
-    return icon
+        if _contains_provider_secret(response, provider):
+            logging.warning('Model icon contained credential material')
+            continue
+
+        icon = sanitize_icon_svg(response)
+        if icon is not None:
+            return icon
+        logging.warning('Model icon failed sanitization (attempt %d/%d)',
+                        attempt, attempts)
+
+    logging.warning('Model could not draw a usable icon after %d attempt(s); '
+                    'using the deterministic fallback', attempts)
+    return None
 
 
 def _provider_secrets(provider):

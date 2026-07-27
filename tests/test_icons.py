@@ -190,6 +190,39 @@ class TestRequestIconSvg(unittest.TestCase):
             self.assertIsNone(
                 request_icon_svg(Planner(), _spec(), {}))
 
+    def test_retries_until_a_valid_icon(self):
+        # A first unusable reply must not drop straight to the glyph while a
+        # drawing-capable provider is right there -- retry, then accept.
+        class _SequenceProvider:
+            name = 'seq-fake'
+            model = 'seq-1'
+
+            def __init__(self, replies):
+                self.replies = list(replies)
+                self.calls = 0
+
+            def generate_text(self, system_prompt, user_prompt,
+                              timeout=120, stream_callback=None):
+                self.calls += 1
+                return self.replies[
+                    min(self.calls - 1, len(self.replies) - 1)]
+
+        provider = _SequenceProvider(['Sorry, no fences here.', _GOOD_SVG])
+        with mock.patch.dict(os.environ,
+                             {'AOD_AI_ICON': 'on', 'AOD_ICON_ATTEMPTS': '3'}):
+            icon = request_icon_svg(provider, _spec(), {'summary': 'x'})
+        self.assertIsNotNone(icon)
+        self.assertIn('&stroke_color;', icon)
+        self.assertEqual(2, provider.calls)
+
+    def test_stops_after_configured_attempts(self):
+        provider = _IconProvider('never an svg')
+        with mock.patch.dict(os.environ,
+                             {'AOD_AI_ICON': 'on', 'AOD_ICON_ATTEMPTS': '2'}):
+            self.assertIsNone(
+                request_icon_svg(provider, _spec(), {}))
+        self.assertEqual(2, provider.calls)
+
 
 if __name__ == '__main__':
     unittest.main()

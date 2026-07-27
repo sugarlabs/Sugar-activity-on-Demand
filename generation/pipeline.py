@@ -72,6 +72,28 @@ _CODE_REPAIR_ATTEMPT_LIMIT = max(
     1, min(_env_int('AOD_CODE_REPAIR_ATTEMPT_LIMIT', 8), 50))
 
 
+def _resolve_icon_provider(selected_provider):
+    """Return a drawing-capable provider for the activity icon, or None.
+
+    Prefers the provider that already planned or wrote the code; otherwise
+    falls back to whatever provider is configured (``AOD_LLM_PROVIDER`` /
+    ``default``), so the icon is AI-drawn even when the code came from the
+    local template or the planner fell back.  Returns None only when no
+    provider is configured at all, or the candidate cannot draw -- the caller
+    then uses the deterministic glyph.
+    """
+    candidate = selected_provider
+    if candidate is None:
+        try:
+            candidate = get_configured_provider('default')
+        except ProviderError:
+            candidate = None
+    if candidate is not None and callable(
+            getattr(candidate, 'generate_text', None)):
+        return candidate
+    return None
+
+
 def generate_activity(spec, output_root=None, provider=None,
                       provider_name='default', use_rag=True,
                       validate_code=True,
@@ -347,14 +369,23 @@ def generate_activity(spec, output_root=None, provider=None,
                 'generation and template fallback is disabled.'
             )
 
-    if selected_provider is not None and provider_used != 'local' \
-            and not plan.get('icon_svg'):
-        progress.report('generating', 0.72,
-                        'Drawing an icon for your activity...')
-        icon_svg = request_icon_svg(selected_provider, spec, plan)
-        if icon_svg:
-            plan['icon_svg'] = icon_svg
-            plan['icon_source'] = 'ai'
+    # Draw a unique AI logo for every activity whenever a drawing-capable
+    # provider is configured -- decoupled from the code generation choice, so
+    # an activity whose code came from the local template (or whose planner
+    # fell back) still gets an AI icon as long as any provider is set up.  The
+    # deterministic glyph is only the last resort: no provider is configured
+    # at all, or every model attempt failed sanitization.
+    if not plan.get('icon_svg'):
+        icon_provider = _resolve_icon_provider(selected_provider)
+        if icon_provider is not None:
+            progress.report('generating', 0.72,
+                            'Asking the model to draw your activity icon...')
+            icon_svg = request_icon_svg(icon_provider, spec, plan)
+            if icon_svg:
+                plan['icon_svg'] = icon_svg
+                plan['icon_source'] = 'ai'
+            else:
+                plan['icon_source'] = 'generated'
         else:
             plan['icon_source'] = 'generated'
 

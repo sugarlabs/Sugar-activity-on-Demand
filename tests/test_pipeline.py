@@ -773,6 +773,44 @@ class TestAodPipeline(unittest.TestCase):
         self.assertIn('<!ENTITY stroke_color', svg)
         self.assertNotIn('M27 8 L35 30', svg)
 
+    def test_ai_icon_drawn_via_configured_provider_when_code_is_local(self):
+        # Even when the code comes from the local template (no code provider),
+        # the icon must still be AI-drawn as long as a provider is configured.
+        icon_provider = _IconDrawingProvider(_valid_activity_source(self.spec))
+        with mock.patch.dict(os.environ, {'AOD_AI_ICON': 'on'}), \
+                mock.patch('generation.pipeline.get_configured_provider',
+                           return_value=icon_provider):
+            result = generate_activity(
+                self.spec,
+                self.output_root,
+                provider_name='local-template',
+                template_fallback=True,
+                enhance=False,
+            )
+        self.assertEqual('local', result.plan['provider'])
+        self.assertEqual(1, icon_provider.icon_calls)
+        self.assertEqual('ai', result.plan['icon_source'])
+        icon_path = os.path.join(result.project_path, 'activity',
+                                 'activity.svg')
+        with open(icon_path, encoding='utf-8') as icon_file:
+            svg = icon_file.read()
+        self.assertIn('M27 8 L35 30', svg)
+
+    def test_icon_falls_back_when_no_provider_configured(self):
+        # Fully offline (no provider resolvable) is the one case AI cannot
+        # cover; the deterministic glyph stands in.
+        with mock.patch.dict(os.environ, {'AOD_AI_ICON': 'on'}), \
+                mock.patch('generation.pipeline.get_configured_provider',
+                           return_value=None):
+            result = generate_activity(
+                self.spec,
+                self.output_root,
+                provider_name='local-template',
+                template_fallback=True,
+                enhance=False,
+            )
+        self.assertEqual('generated', result.plan['icon_source'])
+
     def test_runtime_check_marker_recorded_when_disabled(self):
         provider = _CodegenProvider(_valid_activity_source(self.spec))
         with mock.patch.dict(os.environ, {'AOD_RUNTIME_CHECK': 'off'}):
