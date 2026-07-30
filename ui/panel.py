@@ -195,8 +195,12 @@ class CreateAIActivityPanel(Gtk.EventBox):
         self._version_title_label = None
         self._version_meta_label = None
         self._version_code_label = None
-        self._selected_version = 'v6'
+        self._selected_version = ''
         self._version_mode = 'diff'
+        self._version_compare_before = None
+        self._version_compare_after = None
+        self._diff_before = ''
+        self._diff_after = ''
         self._review_draft_was_shown = False
         self._repair_events_shown = 0
         self._resume_repair_job_id = None
@@ -3726,16 +3730,17 @@ class CreateAIActivityPanel(Gtk.EventBox):
         compare_row.pack_start(compare_label, False, False, 0)
         compare_label.show()
 
-        compare_row.pack_start(self._create_version_compare_pill(_('v1')),
-                               False, False, 0)
+        self._version_compare_before = self._create_version_compare_combo()
+        compare_row.pack_start(self._version_compare_before, False, False, 0)
 
         arrow = Gtk.Label(_('->'))
         arrow.get_style_context().add_class('create-ai-meta-note')
         compare_row.pack_start(arrow, False, False, 0)
         arrow.show()
 
-        compare_row.pack_start(self._create_version_compare_pill(_('v6')),
-                               False, False, 0)
+        self._version_compare_after = self._create_version_compare_combo()
+        compare_row.pack_start(self._version_compare_after, False, False, 0)
+        self._populate_version_compare(self._get_version_history())
 
         title = Gtk.Label()
         self._version_title_label = title
@@ -3793,14 +3798,27 @@ class CreateAIActivityPanel(Gtk.EventBox):
         if keys and self._selected_version not in keys:
             self._selected_version = keys[-1]
 
-        for version in versions:
+        if versions:
+            for version in versions:
+                self._version_history_box.pack_start(
+                    self._create_version_card(version),
+                    False,
+                    False,
+                    0,
+                )
+        else:
+            placeholder = Gtk.Label(
+                _('No versions yet. Generate an activity, then refine it — '
+                  'each version is saved here so you can compare them.'))
+            placeholder.get_style_context().add_class('create-ai-meta-note')
+            placeholder.set_line_wrap(True)
+            placeholder.set_xalign(0)
+            placeholder.set_max_width_chars(30)
             self._version_history_box.pack_start(
-                self._create_version_card(version),
-                False,
-                False,
-                0,
-            )
+                placeholder, False, False, 0)
         self._version_history_box.show_all()
+
+        self._populate_version_compare(versions)
 
         if self._version_title_label is not None:
             self._set_versions_mode(self._version_mode)
@@ -3838,47 +3856,7 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 })
             return versions
 
-        return [
-            {
-                'key': 'v1',
-                'label': _('v1'),
-                'date': _('2026-06-01 11:42:10'),
-                'summary': _('Initial activity scaffold from the first '
-                             'learning prompt.'),
-            },
-            {
-                'key': 'v2',
-                'label': _('v2'),
-                'date': _('2026-06-01 11:45:04'),
-                'summary': _('Added learner-facing prompt copy and starter '
-                             'canvas structure.'),
-            },
-            {
-                'key': 'v3',
-                'label': _('v3'),
-                'date': _('2026-06-01 11:48:31'),
-                'summary': _('Connected toolbar actions and preview metadata.'),
-            },
-            {
-                'key': 'v4',
-                'label': _('v4'),
-                'date': _('2026-06-01 11:50:59'),
-                'summary': _('Prepared Journal save and restore hooks.'),
-            },
-            {
-                'key': 'v5',
-                'label': _('v5'),
-                'date': _('2026-06-01 11:53:31'),
-                'summary': _('Added safety checks and guided edit notes.'),
-            },
-            {
-                'key': 'v6',
-                'label': _('v6'),
-                'date': _('2026-06-01 11:56:57'),
-                'summary': _('Latest version with preview bridge and export '
-                             'metadata ready.'),
-            },
-        ]
+        return []
 
     def _get_session_revisions(self):
         if not self._aod_session_id:
@@ -3946,11 +3924,66 @@ class CreateAIActivityPanel(Gtk.EventBox):
         button.show()
         return button
 
-    def _create_version_compare_pill(self, label):
-        pill = Gtk.Label(label)
-        pill.get_style_context().add_class('create-ai-version-compare-pill')
-        pill.show()
-        return pill
+    def _create_version_compare_combo(self):
+        combo = Gtk.ComboBoxText()
+        combo.get_style_context().add_class('create-ai-version-compare-pill')
+        combo.connect('changed', self.__version_compare_changed_cb)
+        combo.show()
+        return combo
+
+    def __version_compare_changed_cb(self, combo):
+        before = self._version_compare_before
+        after = self._version_compare_after
+        if before is not None and before.get_active_id():
+            self._diff_before = before.get_active_id()
+        if after is not None and after.get_active_id():
+            self._diff_after = after.get_active_id()
+        if self._version_mode == 'diff':
+            self._set_version_diff()
+
+    def _populate_version_compare(self, versions):
+        """Fill the before/after compare dropdowns from the real revisions.
+
+        Resets to the most useful comparison — the newest revision against
+        the one it was refined from — which is what refreshes after a new
+        generation. Manual picks persist until the next generation, since
+        combo changes do not refresh the history.
+        """
+        before = self._version_compare_before
+        after = self._version_compare_after
+        if before is None or after is None:
+            return
+
+        keys = [version['key'] for version in versions]
+        self._diff_after = keys[-1] if keys else ''
+        self._diff_before = self._parent_version_key(self._diff_after, keys)
+
+        for combo in (before, after):
+            combo.handler_block_by_func(self.__version_compare_changed_cb)
+            combo.remove_all()
+            for version in versions:
+                combo.append(version['key'], version['label'])
+            combo.set_active_id(
+                self._diff_before if combo is before else self._diff_after)
+            combo.handler_unblock_by_func(self.__version_compare_changed_cb)
+
+        can_compare = len(keys) >= 2
+        before.set_sensitive(can_compare)
+        after.set_sensitive(can_compare)
+
+    def _parent_version_key(self, version_key, keys):
+        """The key to diff against: the recorded parent revision if it is in
+        the history, else the previous entry, else the first."""
+        if not keys:
+            return ''
+        revision = self._revision_for_key(version_key)
+        if revision is not None and revision.parent_revision_id in keys:
+            return revision.parent_revision_id
+        if version_key in keys:
+            index = keys.index(version_key)
+            if index > 0:
+                return keys[index - 1]
+        return keys[0]
 
     def _set_versions_mode(self, mode):
         self._version_mode = mode
@@ -4013,78 +4046,15 @@ class CreateAIActivityPanel(Gtk.EventBox):
                   })
         else:
             self._version_meta_label.set_text(
-                _('v1 -> v6  •  +12 / -5 lines  •  activity.py'))
+                _('Refine this activity at least once to compare two '
+                  'versions.'))
         self._version_code_label.set_markup(self._format_diff_markup())
 
     def _get_version_source(self, version_key):
         source = self._read_revision_source(version_key)
         if source:
             return source
-
-        prompt = self._get_prompt_text() or _('learning activity')
-        if len(prompt) > 42:
-            prompt = prompt[:39] + '...'
-
-        lines = [
-            'from gi.repository import Gtk',
-            '',
-            'from sugar3.activity import activity',
-            'from sugar3.activity.widgets import ActivityToolbarButton',
-            'from sugar3.activity.widgets import StopButton',
-            'from sugar3.graphics.toolbarbox import ToolbarBox',
-            '',
-            '',
-            'ACTIVITY_TITLE = "%s"' % prompt,
-            'TEMPLATE_NAME = "starter"',
-        ]
-
-        if version_key in ('v4', 'v5', 'v6'):
-            lines.extend([
-                'JOURNAL_ENABLED = True',
-                'PREVIEW_BRIDGE = "%s"' %
-                ('ready' if version_key == 'v6' else 'planned'),
-            ])
-        if version_key in ('v5', 'v6'):
-            lines.append('SAFETY_CHECKS = ["imports", "journal", "offline"]')
-
-        lines.extend([
-            '',
-            '',
-            'class GeneratedActivity(activity.Activity):',
-            '    def __init__(self, handle):',
-            '        activity.Activity.__init__(self, handle)',
-            '        self.max_participants = 1',
-            '        self._build_toolbar()',
-            '        self._build_canvas()',
-            '',
-            '    def _build_toolbar(self):',
-            '        toolbar_box = ToolbarBox()',
-            '        toolbar_box.toolbar.insert(ActivityToolbarButton(self), 0)',
-            '        toolbar_box.toolbar.insert(StopButton(self), -1)',
-            '        self.set_toolbar_box(toolbar_box)',
-            '        toolbar_box.show_all()',
-            '',
-            '    def _build_canvas(self):',
-            '        canvas = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)',
-            '        title = Gtk.Label(label=ACTIVITY_TITLE)',
-            '        canvas.pack_start(title, True, True, 0)',
-            '        self.set_canvas(canvas)',
-            '        canvas.show_all()',
-        ])
-
-        if version_key in ('v4', 'v5', 'v6'):
-            lines.extend([
-                '',
-                '    def write_file(self, file_path):',
-                '        # Journal save hook will be connected by backend.',
-                '        pass',
-                '',
-                '    def read_file(self, file_path):',
-                '        # Journal restore hook will be connected by backend.',
-                '        pass',
-            ])
-
-        return '\n'.join(lines)
+        return _('# No saved source for this version yet.')
 
     def _get_version_diff_lines(self):
         before, after = self._get_version_diff_pair()
@@ -4100,52 +4070,26 @@ class CreateAIActivityPanel(Gtk.EventBox):
                 if marker not in ('+', '-'):
                     marker = ' '
                 lines.append((marker, text))
-            return lines or [(' ', '# No source changes in this revision.')]
+            return lines or [(' ', '# No source changes between these '
+                                  'versions.')]
 
-        return [
-            (' ', 'from gi.repository import Gtk'),
-            (' ', ''),
-            (' ', 'from sugar3.activity import activity'),
-            (' ', 'from sugar3.activity.widgets import ActivityToolbarButton'),
-            (' ', 'from sugar3.activity.widgets import StopButton'),
-            (' ', 'from sugar3.graphics.toolbarbox import ToolbarBox'),
-            (' ', ''),
-            ('-', 'ACTIVITY_TITLE = "learning activity"'),
-            ('+', 'ACTIVITY_TITLE = "%s"' %
-             (self._get_prompt_text() or _('learning activity'))[:42]),
-            (' ', 'TEMPLATE_NAME = "starter"'),
-            ('+', 'JOURNAL_ENABLED = True'),
-            ('+', 'PREVIEW_BRIDGE = "ready"'),
-            ('+', 'SAFETY_CHECKS = ["imports", "journal", "offline"]'),
-            (' ', ''),
-            (' ', ''),
-            (' ', 'class GeneratedActivity(activity.Activity):'),
-            (' ', '    def __init__(self, handle):'),
-            (' ', '        activity.Activity.__init__(self, handle)'),
-            (' ', '        self.max_participants = 1'),
-            (' ', '        self._build_toolbar()'),
-            ('+', '        self._preview_ready = True'),
-            (' ', '        self._build_canvas()'),
-            (' ', ''),
-            ('-', '        title = Gtk.Label(label="Activity preview")'),
-            ('+', '        title = Gtk.Label(label=ACTIVITY_TITLE)'),
-            ('+', '        title.set_justify(Gtk.Justification.CENTER)'),
-            ('-', '        canvas.pack_start(title, False, False, 0)'),
-            ('+', '        canvas.pack_start(title, True, True, 0)'),
-            (' ', '        self.set_canvas(canvas)'),
-            (' ', '        canvas.show_all()'),
-            ('+', ''),
-            ('+', '    def write_file(self, file_path):'),
-            ('+', '        # Journal save hook will be connected by backend.'),
-            ('+', '        pass'),
-        ]
+        return [(' ', '# Generate an activity and refine it to compare '
+                      'versions here.')]
 
     def _get_version_diff_pair(self):
         revisions = self._get_session_revisions()
+        revision_ids = [revision.revision_id for revision in revisions]
+
+        # Prefer the explicit before/after chosen in the compare dropdowns.
+        before = self._diff_before
+        after = self._diff_after
+        if before in revision_ids and after in revision_ids and \
+                before != after:
+            return before, after
+
         if len(revisions) < 2:
             return '', ''
 
-        revision_ids = [revision.revision_id for revision in revisions]
         selected = self._selected_version
         if selected not in revision_ids:
             selected = revision_ids[-1]
@@ -5392,6 +5336,43 @@ class CreateAIActivityPanel(Gtk.EventBox):
             self._ask_bar_entry.grab_focus()
         elif self._live_edit_entry is not None:
             self._live_edit_entry.grab_focus()
+
+    def _focus_live_preview_canvas(self):
+        """Focus the previewed canvas so keyboard controls reach it."""
+        canvas = self._live_preview_canvas
+        if canvas is not None and not self._live_edit_enabled:
+            try:
+                canvas.grab_focus()
+            except Exception:
+                logging.exception('Could not focus preview canvas')
+        return False
+
+    def __preview_canvas_focus_cb(self, widget, event):
+        # A click means the learner wants to play: take focus so key events
+        # start flowing. Return False so the activity's own click handler
+        # still runs.
+        try:
+            widget.grab_focus()
+        except Exception:
+            logging.exception('Could not focus preview canvas on click')
+        return False
+
+    def __preview_key_event_cb(self, widget, event):
+        # The focused canvas already gets key events directly. Forward the
+        # ones it did not consume to the previewed activity instance so
+        # handlers connected on the activity window (self) also fire — that
+        # window is never shown in the preview, so it never sees keys itself.
+        activity = self._live_preview_activity
+        if activity is None:
+            return False
+        signal = ('key-press-event'
+                  if event.type == Gdk.EventType.KEY_PRESS
+                  else 'key-release-event')
+        try:
+            activity.emit(signal, event)
+        except Exception:
+            logging.exception('Could not forward key to preview activity')
+        return False
 
     def __preview_shell_press_cb(self, shell, event):
         if not self._live_edit_enabled or event.button != 1:
@@ -6861,10 +6842,23 @@ if clipboard.wait_is_text_available():
         canvas.set_vexpand(True)
         box.pack_start(canvas, True, True, 0)
 
+        # Keyboard-controlled activities receive key events only when the
+        # canvas can take focus. Make it focusable, refocus it on click, and
+        # forward keys up to any handlers the activity connected on its
+        # window (the common `self.connect('key-press-event', ...)` pattern),
+        # since that window is never shown in the preview.
+        canvas.set_can_focus(True)
+        canvas.add_events(Gdk.EventMask.KEY_PRESS_MASK |
+                          Gdk.EventMask.KEY_RELEASE_MASK)
+        canvas.connect('button-press-event', self.__preview_canvas_focus_cb)
+        shell.connect('key-press-event', self.__preview_key_event_cb)
+        shell.connect('key-release-event', self.__preview_key_event_cb)
+
         self._live_preview_canvas = canvas
         self._live_preview_activity = preview
         self._preview_content_box.pack_start(shell, True, True, 0)
         shell.show_all()
+        GObject.idle_add(self._focus_live_preview_canvas)
         GObject.idle_add(self._refresh_preview_layout)
         # Attach live-edit handlers after the shell is shown so any failure
         # here never blanks the preview.

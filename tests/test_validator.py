@@ -103,6 +103,32 @@ class TestAodValidator(unittest.TestCase):
             'set_bounds' in error for error in report.errors
         ))
 
+    def test_rejects_c_api_cairo_gradient_calls(self):
+        spec = ActivitySpec(
+            'Painter',
+            'Draw a colourful gradient background.',
+            'creation',
+            'MIT',
+        )
+        plan = enrich_plan(spec, {'template': 'canvas'})
+        source = render_activity_source(spec, plan)
+        # A draw handler using the C cairo API instead of the pycairo
+        # constructor — this raises AttributeError every frame and blanks
+        # the canvas, so validation must reject it for the repair loop.
+        source += (
+            '\n\ndef _paint(cr, width, height):\n'
+            '    gradient = cr.pattern_create_linear(0, 0, 0, height)\n'
+            '    cr.set_source(gradient)\n'
+            '    cr.paint()\n'
+        )
+
+        report = validate_source(source)
+
+        self.assertFalse(report.valid)
+        self.assertTrue(any(
+            'pattern_create_linear' in error for error in report.errors
+        ))
+
     def test_request_validation_rejects_generic_source_for_drawing(self):
         spec = ActivitySpec(
             'Draw Together',

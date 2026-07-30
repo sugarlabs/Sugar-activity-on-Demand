@@ -186,9 +186,27 @@ def validate_source(source):
             'Gtk.Adjustment has no set_bounds() method; use set_lower() and '
             'set_upper().'
         ),
+        'pattern_create_linear': (
+            'cairo.Context has no pattern_create_linear() method (that is the '
+            'C API). Build the gradient with cairo.LinearGradient(x0, y0, x1, '
+            'y1), add stops with add_color_stop_rgb/rgba, then '
+            'cr.set_source(gradient) — otherwise the draw handler raises '
+            'AttributeError and the canvas stays blank.'
+        ),
+        'pattern_create_radial': (
+            'cairo.Context has no pattern_create_radial() method (that is the '
+            'C API). Use cairo.RadialGradient(cx0, cy0, r0, cx1, cy1, r1), add '
+            'stops, then cr.set_source(gradient).'
+        ),
+    }
+    # Scan the whole module, not just the Activity class: draw handlers and
+    # helpers are often module-level functions.
+    all_calls = {
+        _call_name(node.func) for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
     }
     for call_name, message in invalid_api_calls.items():
-        if any(name.endswith(call_name) for name in calls):
+        if any(name.endswith(call_name) for name in all_calls):
             report.errors.append(message)
 
     return report

@@ -643,6 +643,151 @@ print('OFFSCREEN-LEARNING-OK')
 '''
 
 
+_OFFSCREEN_VERSIONS_SCRIPT = '''
+import os
+import tempfile
+
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk
+
+from ui.panel import CreateAIActivityPanel
+from service.sessions import AODRevision
+
+
+def pump():
+    while Gtk.events_pending():
+        Gtk.main_iteration_do(False)
+
+
+def _project(source):
+    path = tempfile.mkdtemp(prefix='aod-ver-')
+    with open(os.path.join(path, 'activity.py'), 'w') as handle:
+        handle.write(source)
+    return path
+
+
+V1 = ('class GeneratedActivity:\\n'
+      '    def __init__(self):\\n'
+      '        pass\\n')
+V2 = ('class GeneratedActivity:\\n'
+      '    def __init__(self):\\n'
+      '        pass\\n'
+      '    def added_helper(self):\\n'
+      '        return 1\\n')
+
+r1 = AODRevision.create('job1', 'make a quiz',
+                        {'project_path': _project(V1), 'activity_name': 'Quiz',
+                         'provider': 'p', 'model': 'm', 'template': 'quiz'})
+r2 = AODRevision.create('job2', 'add a helper',
+                        {'project_path': _project(V2), 'activity_name': 'Quiz',
+                         'provider': 'p', 'model': 'm', 'template': 'quiz'},
+                        parent_revision_id=r1.revision_id)
+
+window = Gtk.OffscreenWindow()
+panel = CreateAIActivityPanel()
+window.add(panel)
+window.show_all()
+panel.reset_view()
+pump()
+
+# Two real revisions: history, compare dropdowns, and a real diff.
+panel._aod_session_id = 'test-session'
+panel._get_session_revisions = lambda: [r1, r2]
+panel._refresh_version_history()
+pump()
+
+assert len(panel._version_history_box.get_children()) == 2, 'history cards'
+assert panel._version_compare_after.get_model().iter_n_children(None) == 2, \\
+    'compare dropdown not populated'
+assert panel._diff_after == r2.revision_id, 'after default not newest'
+assert panel._diff_before == r1.revision_id, 'before default not parent'
+assert panel._get_version_diff_pair() == (r1.revision_id, r2.revision_id)
+
+lines = panel._get_version_diff_lines()
+assert any(marker == '+' and 'added_helper' in text
+           for marker, text in lines), 'added method missing from diff'
+
+# One revision: nothing to compare.
+panel._get_session_revisions = lambda: [r1]
+panel._refresh_version_history()
+pump()
+assert not panel._version_compare_before.get_sensitive(), 'compare not disabled'
+assert panel._get_version_diff_pair() == ('', ''), 'unexpected diff pair'
+
+# No session: honest empty state, no fabricated versions.
+panel._aod_session_id = ''
+panel._get_session_revisions = lambda: []
+panel._refresh_version_history()
+pump()
+assert panel._get_version_history() == [], 'fabricated placeholder versions'
+
+# Destroy the panel first: see the note in _OFFSCREEN_SCRIPT above.
+panel.destroy()
+window.destroy()
+print('OFFSCREEN-VERSIONS-OK')
+'''
+
+
+_OFFSCREEN_PREVIEW_KEYS_SCRIPT = '''
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gtk, Gdk
+
+from ui.panel import CreateAIActivityPanel
+
+
+def pump():
+    while Gtk.events_pending():
+        Gtk.main_iteration_do(False)
+
+
+class FakeActivity:
+    def __init__(self):
+        self.emitted = []
+
+    def emit(self, signal, event):
+        self.emitted.append(signal)
+
+
+class FakeEvent:
+    def __init__(self, etype):
+        self.type = etype
+
+
+window = Gtk.OffscreenWindow()
+panel = CreateAIActivityPanel()
+window.add(panel)
+window.show_all()
+panel.reset_view()
+pump()
+
+forward = panel._CreateAIActivityPanel__preview_key_event_cb
+
+# Key presses/releases are forwarded to the previewed activity instance so
+# handlers connected on the activity window (self) fire even though that
+# window is never shown in the preview.
+panel._live_preview_activity = FakeActivity()
+assert forward(None, FakeEvent(Gdk.EventType.KEY_PRESS)) is False
+assert forward(None, FakeEvent(Gdk.EventType.KEY_RELEASE)) is False
+assert panel._live_preview_activity.emitted == [
+    'key-press-event', 'key-release-event'], panel._live_preview_activity.emitted
+
+# No previewed activity: forwarding is a safe no-op, never raises.
+panel._live_preview_activity = None
+assert forward(None, FakeEvent(Gdk.EventType.KEY_PRESS)) is False
+
+# Focus helper is a safe no-op when there is no canvas.
+panel._live_preview_canvas = None
+assert panel._focus_live_preview_canvas() is False
+
+panel.destroy()
+window.destroy()
+print('OFFSCREEN-PREVIEW-KEYS-OK')
+'''
+
+
 @unittest.skipUnless(
     _gtk_display_available(), 'needs a usable display server')
 class TestStudioOffscreen(unittest.TestCase):
@@ -712,6 +857,22 @@ class TestStudioOffscreen(unittest.TestCase):
             'offscreen learning-sidebar test failed:\n%s%s'
             % (completed.stdout, completed.stderr))
         self.assertIn('OFFSCREEN-LEARNING-OK', completed.stdout)
+
+    def test_versions_compare_uses_real_revisions(self):
+        completed = self._run_offscreen(_OFFSCREEN_VERSIONS_SCRIPT)
+        self.assertEqual(
+            0, completed.returncode,
+            'offscreen versions test failed:\n%s%s'
+            % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-VERSIONS-OK', completed.stdout)
+
+    def test_preview_forwards_keys_to_activity(self):
+        completed = self._run_offscreen(_OFFSCREEN_PREVIEW_KEYS_SCRIPT)
+        self.assertEqual(
+            0, completed.returncode,
+            'offscreen preview-keys test failed:\n%s%s'
+            % (completed.stdout, completed.stderr))
+        self.assertIn('OFFSCREEN-PREVIEW-KEYS-OK', completed.stdout)
 
     def test_guided_flow_triggers_on_send_and_studio_fills(self):
         completed = self._run_offscreen(_OFFSCREEN_GUIDED_TRIGGER_SCRIPT)

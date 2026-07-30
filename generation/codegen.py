@@ -73,7 +73,38 @@ def _rendering_guidance():
         'including arcade-style and real-time games — with GTK3 + '
         'cairo: draw in a Gtk.DrawingArea draw callback, drive the '
         'frame loop with GLib.timeout_add (about 33 ms per frame), '
-        'and handle controls with GTK key-press-event handlers.\n\n'
+        'and handle controls with GTK key-press-event handlers.\n'
+        '## Keyboard input — make keys actually work\n'
+        'A Gtk.DrawingArea receives key events ONLY when it is focusable '
+        'and currently holds keyboard focus. For any activity driven by '
+        'the keyboard (arrow keys, WASD, space) do ALL of the following, '
+        'or the keys will silently do nothing:\n'
+        '- On the drawing area: set_can_focus(True) and '
+        'add_events(Gdk.EventMask.KEY_PRESS_MASK | '
+        'Gdk.EventMask.KEY_RELEASE_MASK).\n'
+        "- Connect the drawing area's 'key-press-event' (and "
+        "'key-release-event' when you track held keys) to a handler.\n"
+        '- Give it focus AFTER it is on screen: call grab_focus() from a '
+        "'realize' or 'map' handler on the drawing area (and again on "
+        "'button-press-event' so a click refocuses it). grab_focus() in "
+        '__init__ runs too early and has no effect.\n'
+        "- ALSO connect 'key-press-event' on the Activity itself (self) "
+        'as a fallback so keys keep working if the canvas loses focus.\n'
+        '- In the handler compare event.keyval to Gdk.KEY_Left / '
+        'Gdk.KEY_Right / Gdk.KEY_Up / Gdk.KEY_Down (and Gdk.KEY_w / '
+        'Gdk.KEY_a / Gdk.KEY_s / Gdk.KEY_d / Gdk.KEY_space), update '
+        'state, call queue_draw() to redraw, and return True when you '
+        'consume the key.\n'
+        '## Cairo drawing — pycairo API, not the C API\n'
+        'The draw handler receives a cairo.Context. Use its methods: '
+        'set_source_rgb/rgba, rectangle, arc, move_to, line_to, fill, '
+        'stroke, show_text. For gradients CONSTRUCT a pattern — '
+        'cairo.LinearGradient(x0, y0, x1, y1) or cairo.RadialGradient('
+        'cx0, cy0, r0, cx1, cy1, r1) — then add_color_stop_rgb/rgba(...) '
+        'and cr.set_source(gradient). The context has NO '
+        'pattern_create_linear / pattern_create_radial methods (those are '
+        'the C cairo API); calling them raises AttributeError every frame '
+        'and the canvas renders blank.\n\n'
     )
 
 
