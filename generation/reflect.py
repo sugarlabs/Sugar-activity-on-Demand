@@ -128,9 +128,11 @@ def reflections_for_change(old_source, new_source):
     learner's own edit.  Fail-soft: returns ``[]`` when nothing notable
     changed or either source is unparseable.
     """
+    old_tree = _safe_parse(old_source)
+    new_tree = _safe_parse(new_source)
     prompts = []
 
-    added_text = _string_literals(new_source) - _string_literals(old_source)
+    added_text = _string_literals(new_tree) - _string_literals(old_tree)
     if added_text:
         sample = sorted(added_text, key=len)[0]
         if len(sample) > 40:
@@ -146,7 +148,7 @@ def reflections_for_change(old_source, new_source):
                 'title, a label, and a message can all need to match.'),
         })
 
-    added_defs = _method_names(new_source) - _method_names(old_source)
+    added_defs = _method_names(new_tree) - _method_names(old_tree)
     if added_defs:
         prompts.append({
             'id': 'added_method',
@@ -295,8 +297,7 @@ def _end_line(node):
     return getattr(node, 'end_lineno', node.lineno)
 
 
-def _string_literals(source):
-    tree = _safe_parse(source)
+def _string_literals(tree):
     if tree is None:
         return set()
     return {
@@ -307,8 +308,7 @@ def _string_literals(source):
     }
 
 
-def _method_names(source):
-    tree = _safe_parse(source)
+def _method_names(tree):
     if tree is None:
         return set()
     return {
