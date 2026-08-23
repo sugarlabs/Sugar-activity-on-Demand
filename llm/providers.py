@@ -68,6 +68,15 @@ _OPENROUTER_REASONING_CODEGEN_EFFORT = 'minimal'
 _REASONING_DISABLE_VALUES = ('none', 'false', 'off', 'disabled')
 _REASONING_SAFE_MINIMAL_EFFORT = 'minimal'
 
+# Anthropic requires an explicit cache breakpoint. These markers are the first
+# spec-dependent text in the planning and code-generation system prompts. The
+# prefix before either marker is stable across jobs and comfortably exceeds
+# Anthropic's minimum cacheable prompt length.
+_ANTHROPIC_CACHE_BREAKPOINT_MARKERS = (
+    'OPTIONAL DISCOVERY DIRECTION (DO NOT FORCE INTO FEATURES)',
+    '- Length: ',
+)
+
 
 # Rate limits and server-side hiccups usually clear within seconds, so a
 # short backoff turns "job failed" into "job took a moment longer".
@@ -104,6 +113,25 @@ def _chat_user_content(user_prompt, image_data=None, mime_type=''):
             'image_url': {'url': data_url, 'detail': 'high'},
         },
     ]
+
+
+def _anthropic_system_content(system_prompt):
+    """Add a cache breakpoint without changing the prompt text or order."""
+    for marker in _ANTHROPIC_CACHE_BREAKPOINT_MARKERS:
+        marker_index = system_prompt.find(marker)
+        if marker_index > 0:
+            return [
+                {
+                    'type': 'text',
+                    'text': system_prompt[:marker_index],
+                    'cache_control': {'type': 'ephemeral'},
+                },
+                {
+                    'type': 'text',
+                    'text': system_prompt[marker_index:],
+                },
+            ]
+    return system_prompt
 
 
 def _urlopen_with_retry(request, timeout, label):
@@ -1160,7 +1188,7 @@ class ClaudeProvider(LLMProvider):
         payload = {
             'model': self.model,
             'max_tokens': max_tokens,
-            'system': system_prompt,
+            'system': _anthropic_system_content(system_prompt),
             'messages': [
                 {'role': 'user', 'content': user_prompt},
             ],
