@@ -211,7 +211,7 @@ Choose a provider, paste your API key, and save. Keys are stored locally in your
 | Providers    | OpenRouter, Gemini, OpenAI, Claude, DeepSeek, Qwen, Moonshot, Ollama                   |
 | Default      | OpenRouter with `google/gemini-3.5-flash`                                              |
 | Offline mode | Keyless local template mode for trying the flow without an AI provider                 |
-| Overrides    | `AOD_OPENROUTER_MODEL`, `AOD_GEMINI_MODEL`, `AOD_OLLAMA_MODEL`, and `AOD_LLM_PROVIDER` |
+| Overrides    | `AOD_OPENROUTER_MODEL`, `AOD_GEMINI_MODEL`, `AOD_OLLAMA_MODEL`, `AOD_OLLAMA_NUM_CTX`, and `AOD_LLM_PROVIDER` |
 
 ---
 

@@ -222,6 +222,81 @@ class TestAodLLMProviders(unittest.TestCase):
         with self.assertRaises(ProviderError):
             create_provider('unknown-provider', api_key='session-key')
 
+    @staticmethod
+    def _ollama_response(body):
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read.return_value = json.dumps(body).encode('utf-8')
+        return response
+
+    def test_ollama_request_includes_num_ctx(self):
+        provider = OllamaProvider(model='local-test')
+        response = self._ollama_response({'response': 'ok'})
+
+        with mock.patch('urllib.request.urlopen', return_value=response) \
+                as opener:
+            provider.generate_text('system', 'user')
+            payload = json.loads(opener.call_args[0][0].data.decode('utf-8'))
+
+        # Without num_ctx the Ollama server default (commonly 2048
+        # tokens) silently drops the front of the prompt -- the system
+        # prompt with the GeneratedActivity contract -- and codegen
+        # fails with "did not define GeneratedActivity".
+        self.assertEqual(16384, payload['options']['num_ctx'])
+
+    def test_ollama_num_ctx_env_override(self):
+        provider = OllamaProvider(model='local-test')
+        response = self._ollama_response({'response': 'ok'})
+
+        with mock.patch.dict(os.environ, {'AOD_OLLAMA_NUM_CTX': '4096'}):
+            with mock.patch('urllib.request.urlopen',
+                            return_value=response) as opener:
+                provider.generate_text('system', 'user')
+                payload = json.loads(
+                    opener.call_args[0][0].data.decode('utf-8'))
+
+        self.assertEqual(4096, payload['options']['num_ctx'])
+
+    def test_ollama_num_ctx_zero_defers_to_server(self):
+        provider = OllamaProvider(model='local-test')
+        response = self._ollama_response({'response': 'ok'})
+
+        with mock.patch.dict(os.environ, {'AOD_OLLAMA_NUM_CTX': '0'}):
+            with mock.patch('urllib.request.urlopen',
+                            return_value=response) as opener:
+                provider.generate_text('system', 'user')
+                payload = json.loads(
+                    opener.call_args[0][0].data.decode('utf-8'))
+
+        self.assertNotIn('num_ctx', payload['options'])
+
+    def test_ollama_missing_model_error_lists_installed_models(self):
+        import io
+        import urllib.error
+
+        provider = OllamaProvider(model='llama3.1')
+        not_found = urllib.error.HTTPError(
+            'http://127.0.0.1:11434/api/generate', 404, 'Not Found', {},
+            io.BytesIO(b'{"error":"model \'llama3.1\' not found"}'))
+        tags = self._ollama_response({
+            'models': [
+                {'name': 'llama3.1:8b'},
+                {'name': 'qwen2.5-coder:7b'},
+            ],
+        })
+
+        with mock.patch('urllib.request.urlopen',
+                        side_effect=[not_found, tags]):
+            with self.assertRaises(ProviderError) as raised:
+                provider.generate_text('system', 'user')
+
+        message = str(raised.exception)
+        self.assertIn("Ollama model 'llama3.1' is not installed", message)
+        self.assertIn('llama3.1:8b', message)
+        self.assertIn('qwen2.5-coder:7b', message)
+        self.assertIn("ollama pull llama3.1", message)
+
     def test_gemini_request_includes_safety_settings(self):
         provider = GeminiProvider(api_key='test-key')
         response = mock.Mock()

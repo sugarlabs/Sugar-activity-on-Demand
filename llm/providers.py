@@ -50,6 +50,17 @@ _GEMINI_CODEGEN_MAX_OUTPUT_TOKENS = _env_int(
     9000,
 )
 
+# Ollama fits an over-long prompt to the model's context window by
+# silently dropping tokens from the *front*, and the common server
+# default (2048 tokens) is far smaller than the ~5,000-token codegen
+# prompt.  The system prompt -- which carries the GeneratedActivity
+# contract, the import whitelist and the fencing rules -- sits at the
+# front, so it is exactly what gets dropped: the model then returns a
+# plausible activity that fails the "did not define GeneratedActivity"
+# check.  Request a window that holds the full prompt instead.
+# AOD_OLLAMA_NUM_CTX=0 defers to the server's own configuration.
+_OLLAMA_DEFAULT_NUM_CTX = 16384
+
 # Kimi K2.x on OpenRouter is a reasoning model with reasoning enabled by
 # default (reasoning.default_enabled=true, mandatory=false).  Reasoning
 # tokens count against the completion budget, so the default 9000-token
@@ -1259,6 +1270,11 @@ class OllamaProvider(LLMProvider):
         }
         if num_predict is not None:
             options['num_predict'] = num_predict
+        # Without an explicit num_ctx the server default applies, which
+        # silently truncates the system prompt.  See _OLLAMA_DEFAULT_NUM_CTX.
+        num_ctx = _env_int('AOD_OLLAMA_NUM_CTX', _OLLAMA_DEFAULT_NUM_CTX)
+        if num_ctx > 0:
+            options['num_ctx'] = num_ctx
         payload = {
             'model': self.model,
             'prompt': '%s\n\n%s' % (system_prompt, user_prompt),
@@ -1267,13 +1283,16 @@ class OllamaProvider(LLMProvider):
         }
         if json_mode:
             payload['format'] = 'json'
-        response_data = _post_json(
-            self._endpoint,
-            payload,
-            {'Content-Type': 'application/json'},
-            timeout,
-            'Ollama',
-        )
+        try:
+            response_data = _post_json(
+                self._endpoint,
+                payload,
+                {'Content-Type': 'application/json'},
+                timeout,
+                'Ollama',
+            )
+        except ProviderError as error:
+            raise self._describe_missing_model(error)
         try:
             text = response_data['response']
         except (KeyError, TypeError):
@@ -1283,6 +1302,42 @@ class OllamaProvider(LLMProvider):
                 'Ollama stopped early: output token budget exhausted '
                 '(done_reason length); the returned text is truncated.')
         return text
+
+    def _describe_missing_model(self, error):
+        """Turn Ollama's bare 404 for an uninstalled model into guidance.
+
+        A learner whose pulled tag differs from the configured model (for
+        example ``llama3.1:8b`` installed while ``llama3.1`` resolves to
+        ``llama3.1:latest``) otherwise only sees an opaque HTTP 404.
+        """
+        message = str(error)
+        if 'HTTP 404' not in message or 'not found' not in message:
+            return error
+        hint = "Run 'ollama pull %s' or set AOD_OLLAMA_MODEL to an " \
+            'installed model.' % self.model
+        installed = self._installed_models()
+        if installed:
+            hint = 'Installed models: %s. %s' % (', '.join(installed), hint)
+        return ProviderError(
+            "Ollama model '%s' is not installed. %s" % (self.model, hint))
+
+    def _installed_models(self):
+        """Best-effort list of locally installed Ollama model tags."""
+        suffix = '/api/generate'
+        if not self._endpoint.endswith(suffix):
+            return []
+        tags_url = self._endpoint[:-len(suffix)] + '/api/tags'
+        try:
+            with urllib.request.urlopen(tags_url, timeout=5) as response:
+                data = json.loads(response.read().decode('utf-8'))
+        except (OSError, ValueError):
+            return []
+        models = []
+        for entry in data.get('models', []):
+            name = entry.get('name') if isinstance(entry, dict) else ''
+            if name:
+                models.append(name)
+        return models
 
 
 def _responses_endpoint(endpoint):
