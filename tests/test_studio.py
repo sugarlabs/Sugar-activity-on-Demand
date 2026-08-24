@@ -96,6 +96,15 @@ class TestStudioDecoupling(unittest.TestCase):
         self.assertEqual('Skipped', rows['Journal save test'])
         self.assertEqual('Passed', rows['Model review'])
 
+    def test_unverified_critic_patch_is_not_shown_as_passed(self):
+        from ui.panel import _activity_health_rows
+        rows = dict(_activity_health_rows({
+            'verification_status': 'passed',
+            'runtime_check': 'skipped: disabled',
+            'critic': 'patched-unverified:2',
+        }))
+        self.assertEqual('Not verified', rows['Model review'])
+
     def test_reflection_prompts_are_activity_specific(self):
         from ui.panel import _activity_reflection_prompts
         from ui.panel import _activity_student_explanation

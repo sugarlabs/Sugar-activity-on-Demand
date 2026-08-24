@@ -119,11 +119,45 @@ class TestCriticRound(unittest.TestCase):
             '        self.max_participants = 1',
             '        self.max_participants = 1  # critic-touched',
         ))
-        with mock.patch.dict(os.environ, _CRITIC_ENV):
+        with mock.patch.dict(os.environ, _CRITIC_ENV), \
+                mock.patch('generation.critic.run_runtime_check',
+                           return_value=(True, 'passed')):
             result = run_critic_round(
                 provider, self.spec, self.plan, self.source)
         self.assertIn('# critic-touched', result)
         self.assertEqual('patched:1', self.plan['critic'])
+
+    def test_patch_is_marked_unverified_when_runtime_gate_is_skipped(self):
+        # run_runtime_check returns ok=True both when the activity really
+        # started and when the gate could not run at all.  Recording the
+        # second case as 'patched' would claim the patch re-passed a gate
+        # that never executed.
+        provider = _CriticProvider(_patch_block(
+            '        self.max_participants = 1',
+            '        self.max_participants = 1  # critic-touched',
+        ))
+        with mock.patch.dict(os.environ, _CRITIC_ENV), \
+                mock.patch('generation.critic.run_runtime_check',
+                           return_value=(True, 'skipped: no display')):
+            result = run_critic_round(
+                provider, self.spec, self.plan, self.source)
+        self.assertIn('# critic-touched', result)
+        self.assertEqual('patched-unverified:1', self.plan['critic'])
+
+    def test_runtime_breaking_patch_is_not_reported_as_verified(self):
+        # A patch that would crash on launch still passes static
+        # validation, so with the gate unavailable the only honest
+        # outcome is 'patched-unverified'.
+        provider = _CriticProvider(_patch_block(
+            '        self.max_participants = 1',
+            '        self.max_participants = 1\n'
+            "        raise RuntimeError('boom')",
+        ))
+        with mock.patch.dict(os.environ, _CRITIC_ENV):
+            run_critic_round(provider, self.spec, self.plan, self.source)
+        self.assertFalse(
+            self.plan['critic'].startswith('patched:'),
+            'a never-executed patch must not be recorded as runtime-verified')
 
     def test_garbage_reply_keeps_source(self):
         provider = _CriticProvider('Sure! Here are my thoughts...')

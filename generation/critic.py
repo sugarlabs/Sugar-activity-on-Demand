@@ -148,7 +148,9 @@ def run_critic_round(provider, spec, plan, source, warnings=None,
 
     Records the outcome in plan['critic']: 'ok' when the model found
     nothing to fix, 'patched:N' when N fixes were applied and the
-    result re-passed validation and the runtime gate, 'skipped' in
+    result re-passed validation and the runtime gate,
+    'patched-unverified:N' when the runtime gate could not run and the
+    patch therefore rests on static validation alone, 'skipped' in
     every other case.
     """
     plan['critic'] = 'skipped'
@@ -209,12 +211,23 @@ def run_critic_round(provider, spec, plan, source, warnings=None,
     if not report.valid:
         logging.warning('Critic patch broke validation; keeping original')
         return source
-    runtime_ok, _detail = run_runtime_check(
+    runtime_ok, runtime_detail = run_runtime_check(
         patched, getattr(spec, 'name', 'Generated Activity'))
     if not runtime_ok:
         logging.warning('Critic patch broke the runtime gate; '
                         'keeping original')
         return source
+
+    # run_runtime_check also returns ok=True when it could not run at
+    # all (no display, disabled, or the host probe failed); only the
+    # detail tells the two apart.  Recording those as 'patched' would
+    # claim the patch re-passed a gate that never executed.
+    if runtime_detail.startswith('skipped'):
+        logging.warning('Critic patch could not be runtime-verified (%s); '
+                        'accepting on static validation alone',
+                        runtime_detail)
+        plan['critic'] = 'patched-unverified:%d' % applied
+        return patched
 
     plan['critic'] = 'patched:%d' % applied
     return patched

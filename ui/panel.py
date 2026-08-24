@@ -245,6 +245,13 @@ def _activity_health_rows(plan):
             return _('Failed')
         return _('Unavailable')
 
+    def critic_state(value):
+        # The review ran and its fixes were kept, but the runtime gate
+        # was unavailable, so 'Passed' would overstate the evidence.
+        if value.startswith('patched-unverified'):
+            return _('Not verified')
+        return state(value, ('ok', 'patched'))
+
     return [
         (_('Code checks'), state(verification)),
         (_('Activity launch'), state(runtime)),
@@ -252,7 +259,7 @@ def _activity_health_rows(plan):
          _('Passed') if runtime == 'passed' else
          (_('Skipped') if runtime.startswith('skipped') else
           _('Unavailable'))),
-        (_('Model review'), state(critic, ('ok', 'patched'))),
+        (_('Model review'), critic_state(critic)),
     ]
 
 

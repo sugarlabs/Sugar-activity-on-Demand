@@ -321,9 +321,15 @@ def generate_activity(spec, output_root=None, provider=None,
                         'rolled_back': False,
                     }
                     repair_history.append(critic_event)
+                    critic_message = (
+                        'Critic repair passed static checks; running it '
+                        'was not possible here'
+                        if str(plan.get('critic', '')).startswith(
+                            'patched-unverified')
+                        else 'Critic repair passed every check')
                     progress.report_immediate(
                         'generating', 0.69,
-                        'Critic repair passed every check', {
+                        critic_message, {
                             'draft_activity_source': activity_source,
                             'repair_event': critic_event,
                         })
