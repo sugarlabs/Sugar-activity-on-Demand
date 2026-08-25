@@ -21,6 +21,9 @@ from llm.providers import get_configured_provider
 from llm.providers import get_default_provider_name
 from llm.providers import get_local_provider_name
 from llm.providers import get_provider_statuses
+from core.spec import ActivitySpec
+from generation.codegen import build_codegen_system_prompt
+from generation.prompts import build_system_prompt
 
 
 class TestAodLLMProviders(unittest.TestCase):
@@ -1041,6 +1044,94 @@ class TestAodLLMProviders(unittest.TestCase):
         self.assertEqual(16384, payload['max_tokens'])
         self.assertEqual(1.0, payload['temperature'])
 
+    def test_claude_plan_marks_real_stable_prefix_for_caching(self):
+        provider = create_provider(
+            'claude',
+            api_key='claude-key',
+            model='claude-test',
+        )
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read.return_value = json.dumps({
+            'content': [{
+                'type': 'text',
+                'text': '{"template": "quiz"}',
+            }],
+        }).encode('utf-8')
+        prompts = [
+            build_system_prompt(ActivitySpec(
+                'Story Studio', 'Write stories.', 'creation', 'MIT',
+                template='narrative')),
+            build_system_prompt(ActivitySpec(
+                'Science Lab', 'Measure plants.', 'science', 'GPL-3.0',
+                template='utility')),
+        ]
+
+        with mock.patch('urllib.request.urlopen', return_value=response) \
+                as opener:
+            for system_prompt in prompts:
+                provider.generate_plan(system_prompt, 'user')
+
+        payloads = [
+            json.loads(call.args[0].data.decode('utf-8'))
+            for call in opener.call_args_list
+        ]
+        block_sets = [payload['system'] for payload in payloads]
+        for system_prompt, blocks in zip(prompts, block_sets):
+            self.assertEqual(system_prompt, ''.join(
+                block['text'] for block in blocks))
+            self.assertEqual(
+                {'type': 'ephemeral'}, blocks[0]['cache_control'])
+            self.assertNotIn('cache_control', blocks[1])
+            self.assertTrue(blocks[1]['text'].startswith(
+                'OPTIONAL DISCOVERY DIRECTION'))
+        self.assertEqual(block_sets[0][0]['text'], block_sets[1][0]['text'])
+        self.assertNotEqual(block_sets[0][1]['text'], block_sets[1][1]['text'])
+
+    def test_claude_codegen_marks_real_prefix_before_length_for_caching(self):
+        provider = create_provider(
+            'claude',
+            api_key='claude-key',
+            model='claude-test',
+        )
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        response.read.return_value = json.dumps({
+            'content': [{
+                'type': 'text',
+                'text': '```python\n%s```' % _simple_activity_source(),
+            }],
+        }).encode('utf-8')
+        spec = ActivitySpec(
+            'Drawing Studio', 'Draw with several brushes.', 'creation',
+            'MIT')
+        prompts = [
+            build_codegen_system_prompt(spec, {}, code_size='compact'),
+            build_codegen_system_prompt(spec, {}, code_size='full'),
+        ]
+
+        with mock.patch('urllib.request.urlopen', return_value=response) \
+                as opener:
+            for system_prompt in prompts:
+                provider.generate_activity_source(system_prompt, 'user')
+
+        payloads = [
+            json.loads(call.args[0].data.decode('utf-8'))
+            for call in opener.call_args_list
+        ]
+        block_sets = [payload['system'] for payload in payloads]
+        for system_prompt, blocks in zip(prompts, block_sets):
+            self.assertEqual(system_prompt, ''.join(
+                block['text'] for block in blocks))
+            self.assertEqual(
+                {'type': 'ephemeral'}, blocks[0]['cache_control'])
+            self.assertNotIn('cache_control', blocks[1])
+            self.assertTrue(blocks[1]['text'].startswith('- Length:'))
+        self.assertEqual(block_sets[0][0]['text'], block_sets[1][0]['text'])
+        self.assertNotEqual(block_sets[0][1]['text'], block_sets[1][1]['text'])
+
     def test_claude_codegen_uses_larger_token_budget(self):
         provider = create_provider(
             'claude',
@@ -1072,6 +1163,7 @@ class TestAodLLMProviders(unittest.TestCase):
 
         self.assertIn('GeneratedActivity', source)
         self.assertEqual(16384, payload['max_tokens'])
+        self.assertEqual('system', payload['system'])
 
 
 def _simple_activity_source():
