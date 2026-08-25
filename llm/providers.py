@@ -70,8 +70,10 @@ _REASONING_SAFE_MINIMAL_EFFORT = 'minimal'
 
 # Anthropic requires an explicit cache breakpoint. These markers are the first
 # spec-dependent text in the planning and code-generation system prompts. The
-# prefix before either marker is stable across jobs and comfortably exceeds
-# Anthropic's minimum cacheable prompt length.
+# prefix before either marker is stable across jobs. Cache minimums are model
+# dependent: both clear the default Sonnet model's 1,024-token minimum, while
+# the roughly 2K-token planning prefix silently remains uncached on models
+# requiring 4,096 tokens; the request itself is unaffected.
 _ANTHROPIC_CACHE_BREAKPOINT_MARKERS = (
     'OPTIONAL DISCOVERY DIRECTION (DO NOT FORCE INTO FEATURES)',
     '- Length: ',
