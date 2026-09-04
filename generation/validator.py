@@ -31,6 +31,7 @@ ALLOWED_IMPORT_ROOTS = {
     'random',
     'sugar3',
     'sugargame',
+    'time',
 }
 
 # Allowed only when the runtime actually provides them.  pygame and

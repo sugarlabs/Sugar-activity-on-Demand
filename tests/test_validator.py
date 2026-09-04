@@ -28,6 +28,17 @@ class TestAodValidator(unittest.TestCase):
         self.assertIn('Forbidden import: subprocess', report.errors)
         self.assertIn('Forbidden call: eval', report.errors)
 
+    def test_accepts_time_for_elapsed_play_timers(self):
+        # Activities that keep a play timer or a high score reach for
+        # time.time().  It is pure stdlib and grants no filesystem,
+        # network or process access, so it belongs beside datetime,
+        # which already offers the same clock.
+        report = validate_source(
+            'import time\n'
+            'started = time.time()\n'
+        )
+        self.assertNotIn('Import is not allowlisted: time', report.errors)
+
     def test_rejects_optional_modules_missing_at_runtime(self):
         with mock.patch(
                 'generation.validator._module_available',
