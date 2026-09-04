@@ -790,11 +790,7 @@ def _generate_activity_source_with_provider(
                 'stage', 'passed')
         return repair.source, '', 1, history, ''
 
-    error = '%s: %s' % (
-        repair.reason,
-        _diagnostics_text(
-            _redact_repair_value(repair.diagnostics, provider)),
-    )
+    error = _repair_failure_text(repair, provider)
     return None, error, 1, history, repair.source
 
 
@@ -1083,6 +1079,37 @@ def _diagnostic_score(diagnostics):
 
 def _source_hash(source):
     return hashlib.sha256(source.encode('utf-8')).hexdigest()
+
+
+# Reasons that mean the provider call itself failed.  The diagnostics
+# carried alongside them still describe the draft as it stood *before*
+# the attempt, because no new candidate was ever produced to re-check.
+_PROVIDER_FAILURE_REASONS = (
+    'provider_error',
+    'provider_does_not_support_patch_repair',
+)
+
+
+def _repair_failure_text(repair, provider):
+    """Say why a repair stopped, in terms of what actually stopped it.
+
+    When the provider call raised, the real cause is recorded on the last
+    repair event and ``repair.diagnostics`` is stale.  Reporting the stale
+    diagnostics tells the learner to go fix an import when the run really
+    died on, say, an exhausted API quota — two unrelated remedies.
+    """
+    if repair.reason in _PROVIDER_FAILURE_REASONS:
+        for event in reversed(repair.history or []):
+            detail = event.get('error')
+            if detail:
+                return '%s: %s' % (
+                    repair.reason,
+                    _redact_provider_error(detail, provider),
+                )
+    return '%s: %s' % (
+        repair.reason,
+        _diagnostics_text(_redact_repair_value(repair.diagnostics, provider)),
+    )
 
 
 def _diagnostics_text(diagnostics):
@@ -1432,11 +1459,7 @@ def refine_activity(spec, current_source, current_plan, output_root,
         if not repair.success:
             raise PipelineError(
                 'Refinement repair stopped without regenerating the file: '
-                '%s: %s' % (
-                    repair.reason,
-                    _diagnostics_text(_redact_repair_value(
-                        repair.diagnostics, selected_provider)),
-                ),
+                '%s' % _repair_failure_text(repair, selected_provider),
                 source=repair.source,
                 repair_history=repair_history,
                 diagnostics=_redact_repair_value(
@@ -1580,11 +1603,8 @@ def resume_repair(spec, draft_source, diagnostics, output_root=None,
     ]
     if not repair.success:
         raise PipelineError(
-            'Repair could not finish the saved draft: %s: %s' % (
-                repair.reason,
-                _diagnostics_text(_redact_repair_value(
-                    repair.diagnostics, selected_provider)),
-            ),
+            'Repair could not finish the saved draft: %s'
+            % _repair_failure_text(repair, selected_provider),
             source=repair.source,
             repair_history=repair_history,
             diagnostics=_redact_repair_value(

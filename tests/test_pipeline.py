@@ -1228,6 +1228,52 @@ class TestAodPipeline(unittest.TestCase):
         self.assertIn('GeneratedActivity', raised.exception.source)
         self.assertIsInstance(raised.exception.plan, dict)
 
+    def test_repair_reports_provider_failure_not_stale_diagnostics(self):
+        from generation.pipeline import resume_repair
+
+        current_plan = enrich_plan(
+            self.spec,
+            _FakeProvider().generate_plan('Sugar Activity API reference', ''),
+        )
+        good = _valid_activity_source(self.spec)
+        draft = good.replace(
+            'class GeneratedActivity(activity.Activity):',
+            'class GeneratedActivity(object):')
+        diagnostics = {
+            'stage': 'static_validation',
+            'errors': ['Generated source must define exactly one Activity '
+                       'subclass.'],
+            'warnings': [],
+        }
+
+        class _OutOfCreditProvider(_FakeProvider):
+
+            _api_key = 'sk-provider-secret'
+
+            def generate_text(self, system_prompt, user_prompt, timeout=120,
+                              stream_callback=None, max_output_tokens=None):
+                raise ProviderError(
+                    'HTTP 402: insufficient API credits '
+                    '(key sk-provider-secret).')
+
+        with self.assertRaises(PipelineError) as raised:
+            resume_repair(
+                self.spec,
+                draft,
+                diagnostics,
+                self.output_root,
+                provider=_OutOfCreditProvider(),
+                current_plan=current_plan,
+                package_bundle=False,
+            )
+
+        message = str(raised.exception)
+        # The provider is why the repair stopped, so say so.  Repeating the
+        # draft's own stale errors sends the learner to fix the wrong thing.
+        self.assertIn('insufficient API credits', message)
+        self.assertNotIn('must define exactly one Activity', message)
+        self.assertNotIn('sk-provider-secret', message)
+
 
 def _valid_activity_source(spec):
     plan = enrich_plan(spec, {
