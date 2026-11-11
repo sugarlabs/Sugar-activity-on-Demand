@@ -21,7 +21,9 @@ from generation.known_repairs import find_known_api_issues
 
 ALLOWED_IMPORT_ROOTS = {
     'cairo',
+    'colorsys',
     'datetime',
+    'fractions',
     'gettext',
     'gi',
     'json',
@@ -29,6 +31,7 @@ ALLOWED_IMPORT_ROOTS = {
     'math',
     'pygame',
     'random',
+    'string',
     'sugar3',
     'sugargame',
 }

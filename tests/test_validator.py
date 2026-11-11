@@ -46,6 +46,17 @@ class TestAodValidator(unittest.TestCase):
             'is not installed' in error for error in report.errors),
             report.errors)
 
+    def test_accepts_educational_stdlib_modules(self):
+        source = (
+            'import colorsys\n'
+            'from fractions import Fraction\n'
+            'import string\n'
+        )
+        report = validate_source(source)
+        self.assertFalse(
+            any('Import is not allowlisted' in err for err in report.errors),
+            report.errors)
+
     def test_codegen_prompt_bans_pygame_when_unavailable(self):
         from generation import codegen as aodcodegen
 
